@@ -20,14 +20,10 @@ services:
     container_name: opentelemetry_collector
     ports:
       - "4317:4317"  # OTLP
-      - "55681:55681"  # gRPC
     command:
       - "--config=/etc/otel-config.yaml"
     volumes:
       - ./otel-config.yaml:/etc/otel-config.yaml
-    environment:
-      - "OTEL_RESOURCE_ATTRIBUTES=service.name=nopcommerce-service"
-      - "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317"
 
 volumes:
   nopcommerce_data:

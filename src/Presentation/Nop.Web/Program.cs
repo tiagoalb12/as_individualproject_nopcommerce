@@ -46,6 +46,8 @@ public partial class Program
 
         var app = builder.Build();
 
+        app.Lifetime.ApplicationStopping.Register(() => telemetry.Dispose());
+
         //configure the application HTTP request pipeline
         app.ConfigureRequestPipeline();
         await app.PublishAppStartedEventAsync();

@@ -5,39 +5,38 @@ using System;
 
 namespace Nop.Core.Telemetry
 {
-    public sealed class TelemetryManager
+    public sealed class TelemetryManager : IDisposable
     {
-        private static readonly Lazy<TelemetryManager> instance = 
+        private static readonly Lazy<TelemetryManager> instance =
             new Lazy<TelemetryManager>(() => new TelemetryManager());
 
         private readonly TracerProvider tracerProvider;
         private bool disposed = false;
 
         public static TelemetryManager Instance => instance.Value;
-        
+
         private TelemetryManager()
         {
-            // Criação do TracerProvider com a configuração
             tracerProvider = Sdk.CreateTracerProviderBuilder()
                 .SetResourceBuilder(ResourceBuilder.CreateDefault()
                     .AddService(
                         serviceName: "nopcommerce-service",
                         serviceVersion: "5.0.0",
-                        serviceInstanceId: Environment.MachineName)) 
+                        serviceInstanceId: Environment.MachineName))
                 .AddHttpClientInstrumentation(options =>
                 {
                     options.RecordException = true;
                 })
                 .AddSqlClientInstrumentation(options =>
                 {
-                    options.SetDbStatementForText = true;
+                    options.SetDbStatementForText = false;
                     options.RecordException = true;
                     options.EnableConnectionLevelAttributes = true;
                 })
-                .AddSource("Nop.*")
+                .AddSource("NopCommerce.Custom")
                 .AddOtlpExporter(options =>
                 {
-                    options.Endpoint = new Uri("http://opentelemetry-collector:4317");
+                    options.Endpoint = new Uri("http://telemetry_service:4317");
                     options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
                 })
                 .Build();
