@@ -1,18 +1,33 @@
 services:
-    nopcommerce_web:
-        build: .
-        container_name: nopcommerce
-        ports:
-            - "80:80"
-        depends_on:
-            - nopcommerce_database
-    nopcommerce_database:
-        image: "mcr.microsoft.com/mssql/server:2019-latest"
-        container_name: nopcommerce_mssql_server
-        environment:
-            SA_PASSWORD: "nopCommerce_db_password"
-            ACCEPT_EULA: "Y"
-            MSSQL_PID: "Express"
+  nopcommerce_web:
+    build: .
+    container_name: nopcommerce
+    ports:
+      - "80:80"
+    depends_on:
+      - nopcommerce_database
+      - telemetry_service
+  nopcommerce_database:
+    image: "mcr.microsoft.com/mssql/server:2019-latest"
+    container_name: nopcommerce_mssql_server
+    environment:
+      SA_PASSWORD: "nopCommerce_db_password"
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Express"
+
+  telemetry_service:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: opentelemetry_collector
+    ports:
+      - "4317:4317"  # OTLP
+      - "55681:55681"  # gRPC
+    command:
+      - "--config=/etc/otel-config.yaml"
+    volumes:
+      - ./otel-config.yaml:/etc/otel-config.yaml
+    environment:
+      - "OTEL_RESOURCE_ATTRIBUTES=service.name=nopcommerce-service"
+      - "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317"
 
 volumes:
-  nopcommerce_data:            
+  nopcommerce_data:
