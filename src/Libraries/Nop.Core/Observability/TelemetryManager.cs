@@ -1,6 +1,7 @@
 using OpenTelemetry;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
 using System;
 
 namespace Nop.Core.Telemetry
@@ -11,18 +12,21 @@ namespace Nop.Core.Telemetry
             new Lazy<TelemetryManager>(() => new TelemetryManager());
 
         private readonly TracerProvider tracerProvider;
+        private readonly MeterProvider meterProvider;
         private bool disposed = false;
 
         public static TelemetryManager Instance => instance.Value;
 
         private TelemetryManager()
         {
+            var resourceBuilder = ResourceBuilder.CreateDefault()
+                .AddService(
+                    serviceName: "nopcommerce-service",
+                    serviceVersion: "5.0.0",
+                    serviceInstanceId: Environment.MachineName);
+
             tracerProvider = Sdk.CreateTracerProviderBuilder()
-                .SetResourceBuilder(ResourceBuilder.CreateDefault()
-                    .AddService(
-                        serviceName: "nopcommerce-service",
-                        serviceVersion: "5.0.0",
-                        serviceInstanceId: Environment.MachineName))
+                .SetResourceBuilder(resourceBuilder)
                 .AddHttpClientInstrumentation(options =>
                 {
                     options.RecordException = true;
@@ -40,6 +44,17 @@ namespace Nop.Core.Telemetry
                     options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
                 })
                 .Build();
+
+            meterProvider = Sdk.CreateMeterProviderBuilder()
+                .SetResourceBuilder(resourceBuilder)
+                .AddHttpClientInstrumentation()
+                .AddMeter("NopCommerce.Custom")
+                .AddOtlpExporter(options =>
+                {
+                    options.Endpoint = new Uri("http://telemetry_service:4317");
+                    options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+                })
+                .Build();
         }
 
         public void Dispose()
@@ -47,6 +62,7 @@ namespace Nop.Core.Telemetry
             if (!disposed)
             {
                 tracerProvider?.Dispose();
+                meterProvider?.Dispose();
                 disposed = true;
             }
         }
