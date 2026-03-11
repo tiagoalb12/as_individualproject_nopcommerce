@@ -2,11 +2,14 @@ services:
   nopcommerce_web:
     build: .
     container_name: nopcommerce
+    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
       - nopcommerce_database
       - telemetry_service
+    volumes:
+      - nopcommerce_data:/app/App_Data
 
   nopcommerce_database:
     image: mcr.microsoft.com/mssql/server:2019-latest

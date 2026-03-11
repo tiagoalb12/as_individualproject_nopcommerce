@@ -1,4 +1,5 @@
 ﻿using System.Data.SqlTypes;
+using System.Diagnostics;
 using Nop.Core;
 using Nop.Core.Caching;
 using Nop.Core.Domain.Catalog;
@@ -26,6 +27,9 @@ namespace Nop.Services.Catalog;
 public partial class ProductService : IProductService
 {
     #region Fields
+
+    private static readonly ActivitySource ActivitySource =
+        new("Nop.Services.Catalog.ProductService");
 
     protected readonly CatalogSettings _catalogSettings;
     protected readonly IAclService _aclService;
@@ -482,12 +486,12 @@ public partial class ProductService : IProductService
             return new List<CrossSellProduct>();
 
         var query = from csp in _crossSellProductRepository.Table
-            join p in _productRepository.Table on csp.ProductId2 equals p.Id
-            where productIds.Contains(csp.ProductId1) &&
-                  !p.Deleted &&
-                  (showHidden || p.Published)
-            orderby csp.Id
-            select csp;
+                    join p in _productRepository.Table on csp.ProductId2 equals p.Id
+                    where productIds.Contains(csp.ProductId1) &&
+                          !p.Deleted &&
+                          (showHidden || p.Published)
+                    orderby csp.Id
+                    select csp;
         var crossSellProducts = await query.ToListAsync();
 
         return crossSellProducts;
@@ -531,11 +535,11 @@ public partial class ProductService : IProductService
         var products = await _productRepository.GetAllAsync(query =>
         {
             return from p in query
-                orderby p.DisplayOrder, p.Id
-                where p.Published &&
-                      !p.Deleted &&
-                      p.ShowOnHomepage
-                select p;
+                   orderby p.DisplayOrder, p.Id
+                   where p.Published &&
+                         !p.Deleted &&
+                         p.ShowOnHomepage
+                   select p;
         }, cache => cache.PrepareKeyForDefaultCache(NopCatalogDefaults.ProductsHomepageCacheKey));
 
         return products;
@@ -630,12 +634,12 @@ public partial class ProductService : IProductService
         var featuredProductIds = await _staticCacheManager.GetAsync(cacheKey, async () =>
         {
             var query = from p in _productRepository.Table
-                join pc in _productCategoryRepository.Table on p.Id equals pc.ProductId
-                where p.Published && !p.Deleted && p.VisibleIndividually &&
-                      (!p.AvailableStartDateTimeUtc.HasValue || p.AvailableStartDateTimeUtc.Value < DateTime.UtcNow) &&
-                      (!p.AvailableEndDateTimeUtc.HasValue || p.AvailableEndDateTimeUtc.Value > DateTime.UtcNow) &&
-                      pc.IsFeaturedProduct && categoryId == pc.CategoryId
-                select p;
+                        join pc in _productCategoryRepository.Table on p.Id equals pc.ProductId
+                        where p.Published && !p.Deleted && p.VisibleIndividually &&
+                              (!p.AvailableStartDateTimeUtc.HasValue || p.AvailableStartDateTimeUtc.Value < DateTime.UtcNow) &&
+                              (!p.AvailableEndDateTimeUtc.HasValue || p.AvailableEndDateTimeUtc.Value > DateTime.UtcNow) &&
+                              pc.IsFeaturedProduct && categoryId == pc.CategoryId
+                        select p;
 
             //apply store mapping constraints
             query = await _storeMappingService.ApplyStoreMapping(query, storeId);
@@ -677,12 +681,12 @@ public partial class ProductService : IProductService
         var featuredProductIds = await _staticCacheManager.GetAsync(cacheKey, async () =>
         {
             var query = from p in _productRepository.Table
-                join pm in _productManufacturerRepository.Table on p.Id equals pm.ProductId
-                where p.Published && !p.Deleted && p.VisibleIndividually &&
-                      (!p.AvailableStartDateTimeUtc.HasValue || p.AvailableStartDateTimeUtc.Value < DateTime.UtcNow) &&
-                      (!p.AvailableEndDateTimeUtc.HasValue || p.AvailableEndDateTimeUtc.Value > DateTime.UtcNow) &&
-                      pm.IsFeaturedProduct && manufacturerId == pm.ManufacturerId
-                select p;
+                        join pm in _productManufacturerRepository.Table on p.Id equals pm.ProductId
+                        where p.Published && !p.Deleted && p.VisibleIndividually &&
+                              (!p.AvailableStartDateTimeUtc.HasValue || p.AvailableStartDateTimeUtc.Value < DateTime.UtcNow) &&
+                              (!p.AvailableEndDateTimeUtc.HasValue || p.AvailableEndDateTimeUtc.Value > DateTime.UtcNow) &&
+                              pm.IsFeaturedProduct && manufacturerId == pm.ManufacturerId
+                        select p;
 
             //apply store mapping constraints
             query = await _storeMappingService.ApplyStoreMapping(query, storeId);
@@ -712,10 +716,10 @@ public partial class ProductService : IProductService
     public virtual async Task<IPagedList<Product>> GetProductsMarkedAsNewAsync(int storeId = 0, int pageIndex = 0, int pageSize = int.MaxValue)
     {
         var query = from p in _productRepository.Table
-            where p.Published && p.VisibleIndividually && p.MarkAsNew && !p.Deleted &&
-                  DateTime.UtcNow >= (p.MarkAsNewStartDateTimeUtc ?? SqlDateTime.MinValue.Value) &&
-                  DateTime.UtcNow <= (p.MarkAsNewEndDateTimeUtc ?? SqlDateTime.MaxValue.Value)
-            select p;
+                    where p.Published && p.VisibleIndividually && p.MarkAsNew && !p.Deleted &&
+                          DateTime.UtcNow >= (p.MarkAsNewStartDateTimeUtc ?? SqlDateTime.MinValue.Value) &&
+                          DateTime.UtcNow <= (p.MarkAsNewEndDateTimeUtc ?? SqlDateTime.MaxValue.Value)
+                    select p;
 
         //apply store mapping constraints
         query = await _storeMappingService.ApplyStoreMapping(query, storeId);
@@ -758,9 +762,9 @@ public partial class ProductService : IProductService
         if (categoryIds != null && categoryIds.Any())
         {
             query = from p in query
-                join pc in _productCategoryRepository.Table on p.Id equals pc.ProductId
-                where categoryIds.Contains(pc.CategoryId)
-                select p;
+                    join pc in _productCategoryRepository.Table on p.Id equals pc.ProductId
+                    where categoryIds.Contains(pc.CategoryId)
+                    select p;
         }
 
         var cacheKey = _staticCacheManager
@@ -829,311 +833,350 @@ public partial class ProductService : IProductService
         bool showHidden = false,
         bool? overridePublished = null)
     {
-        //some databases don't support int.MaxValue
-        if (pageSize == int.MaxValue)
-            pageSize = int.MaxValue - 1;
+        // SPAN - operação de pesquisa de produtos
+        using var activity = ActivitySource.StartActivity("Catalogue.SearchProducts");
 
-        var productsQuery = _productRepository.Table;
+        activity?.SetTag("catalog.page_index", pageIndex);
+        activity?.SetTag("catalog.page_size", pageSize);
+        activity?.SetTag("catalog.category_filter", categoryIds?.Count ?? 0);
+        activity?.SetTag("catalog.manufacturer_filter", manufacturerIds?.Count ?? 0);
+        activity?.SetTag("catalog.has_keywords", !string.IsNullOrEmpty(keywords));
+        activity?.SetTag("catalog.price_min", priceMin);
+        activity?.SetTag("catalog.price_max", priceMax);
+        activity?.SetTag("catalog.store_id", storeId);
+        activity?.SetTag("catalog.vendor_id", vendorId);
+        activity?.SetTag("catalog.product_type", productType?.ToString());
 
-        if (!showHidden)
-            productsQuery = productsQuery.Where(p => p.Published);
-        else if (overridePublished.HasValue)
-            productsQuery = productsQuery.Where(p => p.Published == overridePublished.Value);
-
-        var customer = await _workContext.GetCurrentCustomerAsync();
-
-        if (!showHidden || storeId > 0)
+        try
         {
-            //apply store mapping constraints
-            productsQuery = await _storeMappingService.ApplyStoreMapping(productsQuery, storeId);
-        }
+            //some databases don't support int.MaxValue
+            if (pageSize == int.MaxValue)
+                pageSize = int.MaxValue - 1;
 
-        if (!showHidden)
-        {
-            //apply ACL constraints
-            productsQuery = await _aclService.ApplyAcl(productsQuery, customer);
-        }
+            var productsQuery = _productRepository.Table;
 
-        productsQuery =
-            from p in productsQuery
-            where !p.Deleted &&
-                  (!visibleIndividuallyOnly || p.VisibleIndividually) &&
-                  (vendorId == 0 || p.VendorId == vendorId) &&
-                  (
-                      warehouseId == 0 ||
+            if (!showHidden)
+                productsQuery = productsQuery.Where(p => p.Published);
+            else if (overridePublished.HasValue)
+                productsQuery = productsQuery.Where(p => p.Published == overridePublished.Value);
+
+            var customer = await _workContext.GetCurrentCustomerAsync();
+
+            if (!showHidden || storeId > 0)
+            {
+                //apply store mapping constraints
+                productsQuery = await _storeMappingService.ApplyStoreMapping(productsQuery, storeId);
+            }
+
+            if (!showHidden)
+            {
+                //apply ACL constraints
+                productsQuery = await _aclService.ApplyAcl(productsQuery, customer);
+            }
+
+            productsQuery =
+                from p in productsQuery
+                where !p.Deleted &&
+                      (!visibleIndividuallyOnly || p.VisibleIndividually) &&
+                      (vendorId == 0 || p.VendorId == vendorId) &&
                       (
-                          !p.UseMultipleWarehouses ? p.WarehouseId == warehouseId :
-                              _productWarehouseInventoryRepository.Table.Any(pwi => pwi.WarehouseId == warehouseId && pwi.ProductId == p.Id)
-                      )
-                  ) &&
-                  (productType == null || p.ProductTypeId == (int)productType) &&
-                  (showHidden ||
-                   DateTime.UtcNow >= (p.AvailableStartDateTimeUtc ?? SqlDateTime.MinValue.Value) &&
-                   DateTime.UtcNow <= (p.AvailableEndDateTimeUtc ?? SqlDateTime.MaxValue.Value)
-                  ) &&
-                  (priceMin == null || p.Price >= priceMin) &&
-                  (priceMax == null || p.Price <= priceMax)
-            select p;
+                          warehouseId == 0 ||
+                          (
+                              !p.UseMultipleWarehouses ? p.WarehouseId == warehouseId :
+                                  _productWarehouseInventoryRepository.Table.Any(pwi => pwi.WarehouseId == warehouseId && pwi.ProductId == p.Id)
+                          )
+                      ) &&
+                      (productType == null || p.ProductTypeId == (int)productType) &&
+                      (showHidden ||
+                       DateTime.UtcNow >= (p.AvailableStartDateTimeUtc ?? SqlDateTime.MinValue.Value) &&
+                       DateTime.UtcNow <= (p.AvailableEndDateTimeUtc ?? SqlDateTime.MaxValue.Value)
+                      ) &&
+                      (priceMin == null || p.Price >= priceMin) &&
+                      (priceMax == null || p.Price <= priceMax)
+                select p;
 
-        var activeSearchProvider = await _searchPluginManager.LoadPrimaryPluginAsync(customer, storeId);
-        var providerResults = new List<int>();
+            var activeSearchProvider = await _searchPluginManager.LoadPrimaryPluginAsync(customer, storeId);
+            var providerResults = new List<int>();
 
-        if (!string.IsNullOrEmpty(keywords))
-        {
-            var langs = await _languageService.GetAllLanguagesAsync(showHidden: true);
-
-            //Set a flag which will to points need to search in localized properties. If showHidden doesn't set to true should be at least two published languages.
-            var searchLocalizedValue = languageId > 0 && langs.Count >= 2 && (showHidden || langs.Count(l => l.Published) >= 2);
-            var productsByKeywords = new List<int>().AsQueryable();
-            var runStandardSearch = activeSearchProvider is null || showHidden;
-
-            try
+            if (!string.IsNullOrEmpty(keywords))
             {
-                if (!runStandardSearch)
+                // SPAN - pesquisa por palavra-chave
+                using var keywordSpan = ActivitySource.StartActivity("Catalogue.KeywordSearch");
+
+                keywordSpan?.SetTag("catalog.keyword", keywords);
+
+
+                var langs = await _languageService.GetAllLanguagesAsync(showHidden: true);
+
+                //Set a flag which will to points need to search in localized properties. If showHidden doesn't set to true should be at least two published languages.
+                var searchLocalizedValue = languageId > 0 && langs.Count >= 2 && (showHidden || langs.Count(l => l.Published) >= 2);
+                var productsByKeywords = new List<int>().AsQueryable();
+                var runStandardSearch = activeSearchProvider is null || showHidden;
+
+                try
                 {
-                    providerResults = await activeSearchProvider.SearchProductsAsync(keywords, searchLocalizedValue);
-                    productsByKeywords = providerResults.AsQueryable();
+                    if (!runStandardSearch)
+                    {
+                        providerResults = await activeSearchProvider.SearchProductsAsync(keywords, searchLocalizedValue);
+                        productsByKeywords = providerResults.AsQueryable();
+                    }
                 }
-            }
-            catch
-            {
-                runStandardSearch = _catalogSettings.UseStandardSearchWhenSearchProviderThrowsException;
-            }
+                catch
+                {
+                    runStandardSearch = _catalogSettings.UseStandardSearchWhenSearchProviderThrowsException;
+                }
 
-            if (runStandardSearch)
-            {
-                productsByKeywords =
-                    from p in _productRepository.Table
-                    where p.Name.Contains(keywords) ||
-                          (searchDescriptions &&
-                           (p.ShortDescription.Contains(keywords) || p.FullDescription.Contains(keywords))) ||
-                          (searchManufacturerPartNumber && p.ManufacturerPartNumber == keywords) ||
-                          (searchSku && p.Sku == keywords)
-                    select p.Id;
+                if (runStandardSearch)
+                {
+                    productsByKeywords =
+                        from p in _productRepository.Table
+                        where p.Name.Contains(keywords) ||
+                              (searchDescriptions &&
+                               (p.ShortDescription.Contains(keywords) || p.FullDescription.Contains(keywords))) ||
+                              (searchManufacturerPartNumber && p.ManufacturerPartNumber == keywords) ||
+                              (searchSku && p.Sku == keywords)
+                        select p.Id;
 
-                if (searchLocalizedValue)
+                    if (searchLocalizedValue)
+                    {
+                        productsByKeywords = productsByKeywords.Union(
+                            from lp in _localizedPropertyRepository.Table
+                            let checkName = lp.LocaleKey == nameof(Product.Name) &&
+                                            lp.LocaleValue.Contains(keywords)
+                            let checkShortDesc = searchDescriptions &&
+                                                 lp.LocaleKey == nameof(Product.ShortDescription) &&
+                                                 lp.LocaleValue.Contains(keywords)
+                            where
+                                lp.LocaleKeyGroup == nameof(Product) && lp.LanguageId == languageId && (checkName || checkShortDesc)
+
+                            select lp.EntityId);
+                    }
+                }
+
+                //search by SKU for ProductAttributeCombination
+                if (searchSku)
                 {
                     productsByKeywords = productsByKeywords.Union(
-                        from lp in _localizedPropertyRepository.Table
-                        let checkName = lp.LocaleKey == nameof(Product.Name) &&
-                                        lp.LocaleValue.Contains(keywords)
-                        let checkShortDesc = searchDescriptions &&
-                                             lp.LocaleKey == nameof(Product.ShortDescription) &&
-                                             lp.LocaleValue.Contains(keywords)
-                        where
-                            lp.LocaleKeyGroup == nameof(Product) && lp.LanguageId == languageId && (checkName || checkShortDesc)
-
-                        select lp.EntityId);
+                        from pac in _productAttributeCombinationRepository.Table
+                        where pac.Sku == keywords
+                        select pac.ProductId);
                 }
-            }
 
-            //search by SKU for ProductAttributeCombination
-            if (searchSku)
-            {
-                productsByKeywords = productsByKeywords.Union(
-                    from pac in _productAttributeCombinationRepository.Table
-                    where pac.Sku == keywords
-                    select pac.ProductId);
-            }
-
-            //search by category name if admin allows
-            if (_catalogSettings.AllowCustomersToSearchWithCategoryName)
-            {
-                var categoryQuery = _categoryRepository.Table;
-
-                if (!showHidden)
-                    categoryQuery = categoryQuery.Where(p => p.Published);
-                else if (overridePublished.HasValue)
-                    categoryQuery = categoryQuery.Where(p => p.Published == overridePublished.Value);
-
-                if (!showHidden || storeId > 0)
-                    categoryQuery = await _storeMappingService.ApplyStoreMapping(categoryQuery, storeId);
-
-                if (!showHidden)
-                    categoryQuery = await _aclService.ApplyAcl(categoryQuery, customer);
-
-                productsByKeywords = productsByKeywords.Union(
-                    from pc in _productCategoryRepository.Table
-                    join c in categoryQuery on pc.CategoryId equals c.Id
-                    where c.Name.Contains(keywords) && !c.Deleted
-                    select pc.ProductId
-                );
-
-                if (searchLocalizedValue)
+                //search by category name if admin allows
+                if (_catalogSettings.AllowCustomersToSearchWithCategoryName)
                 {
+                    var categoryQuery = _categoryRepository.Table;
+
+                    if (!showHidden)
+                        categoryQuery = categoryQuery.Where(p => p.Published);
+                    else if (overridePublished.HasValue)
+                        categoryQuery = categoryQuery.Where(p => p.Published == overridePublished.Value);
+
+                    if (!showHidden || storeId > 0)
+                        categoryQuery = await _storeMappingService.ApplyStoreMapping(categoryQuery, storeId);
+
+                    if (!showHidden)
+                        categoryQuery = await _aclService.ApplyAcl(categoryQuery, customer);
+
                     productsByKeywords = productsByKeywords.Union(
                         from pc in _productCategoryRepository.Table
-                        join lp in _localizedPropertyRepository.Table on pc.CategoryId equals lp.EntityId
-                        where lp.LocaleKeyGroup == nameof(Category) &&
-                              lp.LocaleKey == nameof(Category.Name) &&
-                              lp.LocaleValue.Contains(keywords) &&
-                              lp.LanguageId == languageId
-                        select pc.ProductId);
+                        join c in categoryQuery on pc.CategoryId equals c.Id
+                        where c.Name.Contains(keywords) && !c.Deleted
+                        select pc.ProductId
+                    );
+
+                    if (searchLocalizedValue)
+                    {
+                        productsByKeywords = productsByKeywords.Union(
+                            from pc in _productCategoryRepository.Table
+                            join lp in _localizedPropertyRepository.Table on pc.CategoryId equals lp.EntityId
+                            where lp.LocaleKeyGroup == nameof(Category) &&
+                                  lp.LocaleKey == nameof(Category.Name) &&
+                                  lp.LocaleValue.Contains(keywords) &&
+                                  lp.LanguageId == languageId
+                            select pc.ProductId);
+                    }
                 }
-            }
 
-            //search by manufacturer name if admin allows
-            if (_catalogSettings.AllowCustomersToSearchWithManufacturerName)
-            {
-                var manufacturerQuery = _manufacturerRepository.Table;
-
-                if (!showHidden)
-                    manufacturerQuery = manufacturerQuery.Where(p => p.Published);
-                else if (overridePublished.HasValue)
-                    manufacturerQuery = manufacturerQuery.Where(p => p.Published == overridePublished.Value);
-
-                if (!showHidden || storeId > 0)
-                    manufacturerQuery = await _storeMappingService.ApplyStoreMapping(manufacturerQuery, storeId);
-
-                if (!showHidden)
-                    manufacturerQuery = await _aclService.ApplyAcl(manufacturerQuery, customer);
-
-                productsByKeywords = productsByKeywords.Union(
-                    from pm in _productManufacturerRepository.Table
-                    join m in manufacturerQuery on pm.ManufacturerId equals m.Id
-                    where m.Name.Contains(keywords) && !m.Deleted
-                    select pm.ProductId
-                );
-
-                if (searchLocalizedValue)
+                //search by manufacturer name if admin allows
+                if (_catalogSettings.AllowCustomersToSearchWithManufacturerName)
                 {
+                    var manufacturerQuery = _manufacturerRepository.Table;
+
+                    if (!showHidden)
+                        manufacturerQuery = manufacturerQuery.Where(p => p.Published);
+                    else if (overridePublished.HasValue)
+                        manufacturerQuery = manufacturerQuery.Where(p => p.Published == overridePublished.Value);
+
+                    if (!showHidden || storeId > 0)
+                        manufacturerQuery = await _storeMappingService.ApplyStoreMapping(manufacturerQuery, storeId);
+
+                    if (!showHidden)
+                        manufacturerQuery = await _aclService.ApplyAcl(manufacturerQuery, customer);
+
                     productsByKeywords = productsByKeywords.Union(
                         from pm in _productManufacturerRepository.Table
-                        join lp in _localizedPropertyRepository.Table on pm.ManufacturerId equals lp.EntityId
-                        where lp.LocaleKeyGroup == nameof(Manufacturer) &&
-                              lp.LocaleKey == nameof(Manufacturer.Name) &&
-                              lp.LocaleValue.Contains(keywords) &&
-                              lp.LanguageId == languageId
-                        select pm.ProductId);
+                        join m in manufacturerQuery on pm.ManufacturerId equals m.Id
+                        where m.Name.Contains(keywords) && !m.Deleted
+                        select pm.ProductId
+                    );
+
+                    if (searchLocalizedValue)
+                    {
+                        productsByKeywords = productsByKeywords.Union(
+                            from pm in _productManufacturerRepository.Table
+                            join lp in _localizedPropertyRepository.Table on pm.ManufacturerId equals lp.EntityId
+                            where lp.LocaleKeyGroup == nameof(Manufacturer) &&
+                                  lp.LocaleKey == nameof(Manufacturer.Name) &&
+                                  lp.LocaleValue.Contains(keywords) &&
+                                  lp.LanguageId == languageId
+                            select pm.ProductId);
+                    }
                 }
-            }
 
-            if (searchProductTags)
-            {
-                productsByKeywords = productsByKeywords.Union(
-                    from pptm in _productTagMappingRepository.Table
-                    join pt in _productTagRepository.Table on pptm.ProductTagId equals pt.Id
-                    where pt.Name.Contains(keywords)
-                    select pptm.ProductId
-                );
-
-                if (searchLocalizedValue)
+                if (searchProductTags)
                 {
                     productsByKeywords = productsByKeywords.Union(
                         from pptm in _productTagMappingRepository.Table
-                        join lp in _localizedPropertyRepository.Table on pptm.ProductTagId equals lp.EntityId
-                        where lp.LocaleKeyGroup == nameof(ProductTag) &&
-                              lp.LocaleKey == nameof(ProductTag.Name) &&
-                              lp.LocaleValue.Contains(keywords) &&
-                              lp.LanguageId == languageId
-                        select pptm.ProductId);
+                        join pt in _productTagRepository.Table on pptm.ProductTagId equals pt.Id
+                        where pt.Name.Contains(keywords)
+                        select pptm.ProductId
+                    );
+
+                    if (searchLocalizedValue)
+                    {
+                        productsByKeywords = productsByKeywords.Union(
+                            from pptm in _productTagMappingRepository.Table
+                            join lp in _localizedPropertyRepository.Table on pptm.ProductTagId equals lp.EntityId
+                            where lp.LocaleKeyGroup == nameof(ProductTag) &&
+                                  lp.LocaleKey == nameof(ProductTag.Name) &&
+                                  lp.LocaleValue.Contains(keywords) &&
+                                  lp.LanguageId == languageId
+                            select pptm.ProductId);
+                    }
+                }
+
+                productsQuery =
+                    from p in productsQuery
+                    join pbk in productsByKeywords on p.Id equals pbk
+                    select p;
+            }
+
+            if (categoryIds is not null)
+            {
+                categoryIds.Remove(0);
+
+                if (categoryIds.Any())
+                {
+                    var productCategoryQuery =
+                        from pc in _productCategoryRepository.Table
+                        join c in _categoryRepository.Table on pc.CategoryId equals c.Id
+                        where (!excludeFeaturedProducts || !pc.IsFeaturedProduct) &&
+                              categoryIds.Contains(pc.CategoryId)
+                        orderby c.DisplayOrder
+                        group pc by pc.ProductId into pc
+                        select new
+                        {
+                            ProductId = pc.Key,
+                            DisplayOrder = pc.First().DisplayOrder
+                        };
+
+                    productsQuery =
+                        from p in productsQuery
+                        join pc in productCategoryQuery on p.Id equals pc.ProductId
+                        orderby pc.DisplayOrder, p.Name
+                        select p;
                 }
             }
 
-            productsQuery =
-                from p in productsQuery
-                join pbk in productsByKeywords on p.Id equals pbk
-                select p;
-        }
-
-        if (categoryIds is not null)
-        {
-            categoryIds.Remove(0);
-
-            if (categoryIds.Any())
+            if (manufacturerIds is not null)
             {
-                var productCategoryQuery =
-                    from pc in _productCategoryRepository.Table
-                    join c in _categoryRepository.Table on pc.CategoryId equals c.Id
-                    where (!excludeFeaturedProducts || !pc.IsFeaturedProduct) &&
-                          categoryIds.Contains(pc.CategoryId)
-                    orderby c.DisplayOrder
-                    group pc by pc.ProductId into pc
-                    select new
-                    {
-                        ProductId = pc.Key,
-                        DisplayOrder = pc.First().DisplayOrder
-                    };
+                manufacturerIds.Remove(0);
 
+                if (manufacturerIds.Any())
+                {
+                    var productManufacturerQuery =
+                        from pm in _productManufacturerRepository.Table
+                        where (!excludeFeaturedProducts || !pm.IsFeaturedProduct) &&
+                              manufacturerIds.Contains(pm.ManufacturerId)
+                        group pm by pm.ProductId into pm
+                        select new
+                        {
+                            ProductId = pm.Key,
+                            DisplayOrder = pm.First().DisplayOrder
+                        };
+
+                    productsQuery =
+                        from p in productsQuery
+                        join pm in productManufacturerQuery on p.Id equals pm.ProductId
+                        orderby pm.DisplayOrder, p.Name
+                        select p;
+                }
+            }
+
+            if (productTagId > 0)
+            {
                 productsQuery =
                     from p in productsQuery
-                    join pc in productCategoryQuery on p.Id equals pc.ProductId
-                    orderby pc.DisplayOrder, p.Name
+                    join ptm in _productTagMappingRepository.Table on p.Id equals ptm.ProductId
+                    where ptm.ProductTagId == productTagId
                     select p;
             }
-        }
 
-        if (manufacturerIds is not null)
-        {
-            manufacturerIds.Remove(0);
-
-            if (manufacturerIds.Any())
+            if (filteredSpecOptions?.Count > 0)
             {
-                var productManufacturerQuery =
-                    from pm in _productManufacturerRepository.Table
-                    where (!excludeFeaturedProducts || !pm.IsFeaturedProduct) &&
-                          manufacturerIds.Contains(pm.ManufacturerId)
-                    group pm by pm.ProductId into pm
-                    select new
-                    {
-                        ProductId = pm.Key,
-                        DisplayOrder = pm.First().DisplayOrder
-                    };
+                var specificationAttributeIds = filteredSpecOptions
+                    .Select(sao => sao.SpecificationAttributeId)
+                    .Distinct();
 
-                productsQuery =
-                    from p in productsQuery
-                    join pm in productManufacturerQuery on p.Id equals pm.ProductId
-                    orderby pm.DisplayOrder, p.Name
-                    select p;
+                foreach (var specificationAttributeId in specificationAttributeIds)
+                {
+                    var optionIdsBySpecificationAttribute = filteredSpecOptions
+                        .Where(o => o.SpecificationAttributeId == specificationAttributeId)
+                        .Select(o => o.Id);
+
+                    var productSpecificationQuery =
+                        from psa in _productSpecificationAttributeRepository.Table
+                        where psa.AllowFiltering && optionIdsBySpecificationAttribute.Contains(psa.SpecificationAttributeOptionId)
+                        select psa;
+
+                    productsQuery =
+                        from p in productsQuery
+                        where productSpecificationQuery.Any(pc => pc.ProductId == p.Id)
+                        select p;
+                }
             }
-        }
 
-        if (productTagId > 0)
-        {
-            productsQuery =
-                from p in productsQuery
-                join ptm in _productTagMappingRepository.Table on p.Id equals ptm.ProductId
-                where ptm.ProductTagId == productTagId
-                select p;
-        }
-
-        if (filteredSpecOptions?.Count > 0)
-        {
-            var specificationAttributeIds = filteredSpecOptions
-                .Select(sao => sao.SpecificationAttributeId)
-                .Distinct();
-
-            foreach (var specificationAttributeId in specificationAttributeIds)
+            if (providerResults.Any() && orderBy == ProductSortingEnum.Position && !showHidden)
             {
-                var optionIdsBySpecificationAttribute = filteredSpecOptions
-                    .Where(o => o.SpecificationAttributeId == specificationAttributeId)
-                    .Select(o => o.Id);
+                var sortedProducts = from p in productsQuery
+                                     join pr in providerResults.Select((id, ind) => new { ind, id }) on p.Id equals pr.id into orderSeq
+                                     from os in orderSeq.DefaultIfEmpty()
+                                     orderby os == null ? int.MaxValue : os.ind
+                                     select p;
 
-                var productSpecificationQuery =
-                    from psa in _productSpecificationAttributeRepository.Table
-                    where psa.AllowFiltering && optionIdsBySpecificationAttribute.Contains(psa.SpecificationAttributeOptionId)
-                    select psa;
 
-                productsQuery =
-                    from p in productsQuery
-                    where productSpecificationQuery.Any(pc => pc.ProductId == p.Id)
-                    select p;
+                return await sortedProducts.ToPagedListAsync(pageIndex, pageSize);
             }
-        }
 
-        if (providerResults.Any() && orderBy == ProductSortingEnum.Position && !showHidden)
+            // SPAN - consulta ao banco de dados para pesquisa de produtos
+            using var querySpan = ActivitySource.StartActivity("Catalogue.DBQuery");
+
+            var result = await productsQuery
+                .OrderBy(_localizedPropertyRepository, await _workContext.GetWorkingLanguageAsync(), orderBy)
+                .ToPagedListAsync(pageIndex, pageSize);
+
+            activity?.SetTag("catalog.result_count", result.TotalCount);
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
+
+            return result;
+        }
+        catch (Exception ex)
         {
-            var sortedProducts = from p in productsQuery
-                                 join pr in providerResults.Select((id, ind) => new { ind, id }) on p.Id equals pr.id into orderSeq
-                                 from os in orderSeq.DefaultIfEmpty()
-                                 orderby os == null ? int.MaxValue : os.ind
-                                 select p;
-                                 
-
-            return await sortedProducts.ToPagedListAsync(pageIndex, pageSize);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            throw;
         }
-
-        return await productsQuery.OrderBy(_localizedPropertyRepository, await _workContext.GetWorkingLanguageAsync(), orderBy).ToPagedListAsync(pageIndex, pageSize);
     }
 
     /// <summary>
@@ -1150,12 +1193,12 @@ public partial class ProductService : IProductService
         int pageIndex = 0, int pageSize = int.MaxValue)
     {
         var query = from p in _productRepository.Table
-            join pam in _productAttributeMappingRepository.Table on p.Id equals pam.ProductId
-            where
-                pam.ProductAttributeId == productAttributeId &&
-                !p.Deleted
-            orderby p.Name
-            select p;
+                    join pam in _productAttributeMappingRepository.Table on p.Id equals pam.ProductId
+                    where
+                        pam.ProductAttributeId == productAttributeId &&
+                        !p.Deleted
+                    orderby p.Name
+                    select p;
 
         return await query.ToPagedListAsync(pageIndex, pageSize);
     }
@@ -1186,7 +1229,7 @@ public partial class ProductService : IProductService
                 (!p.AvailableEndDateTimeUtc.HasValue || p.AvailableEndDateTimeUtc.Value > DateTime.UtcNow));
         }
         //vendor filtering
-        if (vendorId > 0) 
+        if (vendorId > 0)
             query = query.Where(p => p.VendorId == vendorId);
 
         //apply store mapping constraints
@@ -1266,22 +1309,22 @@ public partial class ProductService : IProductService
         int pageIndex = 0, int pageSize = int.MaxValue, bool getOnlyTotalCount = false)
     {
         var combinations = from pac in _productAttributeCombinationRepository.Table
-            join p in _productRepository.Table on pac.ProductId equals p.Id
-            where
-                //filter by combinations with stock quantity less than the minimum
-                pac.StockQuantity <= pac.MinStockQuantity &&
-                //filter by products with tracking inventory by attributes
-                p.ManageInventoryMethodId == (int)ManageInventoryMethod.ManageStockByAttributes &&
-                //ignore deleted products
-                !p.Deleted &&
-                //ignore grouped products
-                p.ProductTypeId != (int)ProductType.GroupedProduct &&
-                //filter by vendor
-                ((vendorId ?? 0) == 0 || p.VendorId == vendorId) &&
-                //whether to load published products only
-                (loadPublishedOnly == null || p.Published == loadPublishedOnly)
-            orderby pac.ProductId, pac.Id
-            select pac;
+                           join p in _productRepository.Table on pac.ProductId equals p.Id
+                           where
+                               //filter by combinations with stock quantity less than the minimum
+                               pac.StockQuantity <= pac.MinStockQuantity &&
+                               //filter by products with tracking inventory by attributes
+                               p.ManageInventoryMethodId == (int)ManageInventoryMethod.ManageStockByAttributes &&
+                               //ignore deleted products
+                               !p.Deleted &&
+                               //ignore grouped products
+                               p.ProductTypeId != (int)ProductType.GroupedProduct &&
+                               //filter by vendor
+                               ((vendorId ?? 0) == 0 || p.VendorId == vendorId) &&
+                               //whether to load published products only
+                               (loadPublishedOnly == null || p.Published == loadPublishedOnly)
+                           orderby pac.ProductId, pac.Id
+                           select pac;
 
         return await combinations.ToPagedListAsync(pageIndex, pageSize, getOnlyTotalCount);
     }
@@ -1302,10 +1345,10 @@ public partial class ProductService : IProductService
         sku = sku.Trim();
 
         var query = from p in _productRepository.Table
-            orderby p.Id
-            where !p.Deleted &&
-                  p.Sku == sku
-            select p;
+                    orderby p.Id
+                    where !p.Deleted &&
+                          p.Sku == sku
+                    select p;
         var product = await query.FirstOrDefaultAsync();
 
         return product;
@@ -1480,40 +1523,40 @@ public partial class ProductService : IProductService
         switch (product.RentalPricePeriod)
         {
             case RentalPricePeriod.Days:
-            {
-                var totalDaysToRent = Math.Max((endDate - startDate).TotalDays, 1);
-                var configuredPeriodDays = product.RentalPriceLength;
-                totalPeriods = Convert.ToInt32(Math.Ceiling(totalDaysToRent / configuredPeriodDays));
-            }
+                {
+                    var totalDaysToRent = Math.Max((endDate - startDate).TotalDays, 1);
+                    var configuredPeriodDays = product.RentalPriceLength;
+                    totalPeriods = Convert.ToInt32(Math.Ceiling(totalDaysToRent / configuredPeriodDays));
+                }
 
                 break;
             case RentalPricePeriod.Weeks:
-            {
-                var totalDaysToRent = Math.Max((endDate - startDate).TotalDays, 1);
-                var configuredPeriodDays = 7 * product.RentalPriceLength;
-                totalPeriods = Convert.ToInt32(Math.Ceiling(totalDaysToRent / configuredPeriodDays));
-            }
+                {
+                    var totalDaysToRent = Math.Max((endDate - startDate).TotalDays, 1);
+                    var configuredPeriodDays = 7 * product.RentalPriceLength;
+                    totalPeriods = Convert.ToInt32(Math.Ceiling(totalDaysToRent / configuredPeriodDays));
+                }
 
                 break;
             case RentalPricePeriod.Months:
-            {
-                //Source: http://stackoverflow.com/questions/4638993/difference-in-months-between-two-dates
-                var totalMonthsToRent = (endDate.Year - startDate.Year) * 12 + endDate.Month - startDate.Month;
-                if (startDate.AddMonths(totalMonthsToRent) < endDate)
-                    //several days added (not full month)
-                    totalMonthsToRent++;
+                {
+                    //Source: http://stackoverflow.com/questions/4638993/difference-in-months-between-two-dates
+                    var totalMonthsToRent = (endDate.Year - startDate.Year) * 12 + endDate.Month - startDate.Month;
+                    if (startDate.AddMonths(totalMonthsToRent) < endDate)
+                        //several days added (not full month)
+                        totalMonthsToRent++;
 
-                var configuredPeriodMonths = product.RentalPriceLength;
-                totalPeriods = Convert.ToInt32(Math.Ceiling((double)totalMonthsToRent / configuredPeriodMonths));
-            }
+                    var configuredPeriodMonths = product.RentalPriceLength;
+                    totalPeriods = Convert.ToInt32(Math.Ceiling((double)totalMonthsToRent / configuredPeriodMonths));
+                }
 
                 break;
             case RentalPricePeriod.Years:
-            {
-                var totalDaysToRent = Math.Max((endDate - startDate).TotalDays, 1);
-                var configuredPeriodDays = 365 * product.RentalPriceLength;
-                totalPeriods = Convert.ToInt32(Math.Ceiling(totalDaysToRent / configuredPeriodDays));
-            }
+                {
+                    var totalDaysToRent = Math.Max((endDate - startDate).TotalDays, 1);
+                    var configuredPeriodDays = 365 * product.RentalPriceLength;
+                    totalPeriods = Convert.ToInt32(Math.Ceiling(totalDaysToRent / configuredPeriodDays));
+                }
 
                 break;
             default:
@@ -1790,7 +1833,7 @@ public partial class ProductService : IProductService
 
             //associated product (bundle)
             var associatedProduct = await GetProductByIdAsync(attributeValue.AssociatedProductId);
-            if (associatedProduct != null) 
+            if (associatedProduct != null)
                 await AdjustInventoryAsync(associatedProduct, quantityToChange * attributeValue.Quantity, message);
         }
     }
@@ -1898,12 +1941,12 @@ public partial class ProductService : IProductService
     public virtual async Task<IList<RelatedProduct>> GetRelatedProductsByProductId1Async(int productId, bool showHidden = false)
     {
         var query = from rp in _relatedProductRepository.Table
-            join p in _productRepository.Table on rp.ProductId2 equals p.Id
-            where rp.ProductId1 == productId &&
-                  !p.Deleted &&
-                  (showHidden || p.Published)
-            orderby rp.DisplayOrder, rp.Id
-            select rp;
+                    join p in _productRepository.Table on rp.ProductId2 equals p.Id
+                    where rp.ProductId1 == productId &&
+                          !p.Deleted &&
+                          (showHidden || p.Published)
+                    orderby rp.DisplayOrder, rp.Id
+                    select rp;
 
         var relatedProducts = await _staticCacheManager.GetAsync(_staticCacheManager.PrepareKeyForDefaultCache(NopCatalogDefaults.RelatedProductsCacheKey, productId, showHidden), async () => await query.ToListAsync());
 
@@ -2170,9 +2213,9 @@ public partial class ProductService : IProductService
     public virtual async Task<IList<ProductPicture>> GetProductPicturesByProductIdAsync(int productId)
     {
         var query = from pp in _productPictureRepository.Table
-            where pp.ProductId == productId
-            orderby pp.DisplayOrder, pp.Id
-            select pp;
+                    where pp.ProductId == productId
+                    orderby pp.DisplayOrder, pp.Id
+                    select pp;
 
         var productPictures = await query.ToListAsync();
 
@@ -2248,9 +2291,9 @@ public partial class ProductService : IProductService
         if (discountId.HasValue)
         {
             products = from product in products
-                join dpm in _discountProductMappingRepository.Table on product.Id equals dpm.EntityId
-                where dpm.DiscountId == discountId.Value
-                select product;
+                       join dpm in _discountProductMappingRepository.Table on product.Id equals dpm.EntityId
+                       where dpm.DiscountId == discountId.Value
+                       select product;
         }
 
         if (!showHidden)
@@ -2286,9 +2329,9 @@ public partial class ProductService : IProductService
     public virtual async Task<IList<ProductVideo>> GetProductVideosByProductIdAsync(int productId)
     {
         var query = from pvm in _productVideoRepository.Table
-            where pvm.ProductId == productId
-            orderby pvm.DisplayOrder, pvm.Id
-            select pvm;
+                    where pvm.ProductId == productId
+                    orderby pvm.DisplayOrder, pvm.Id
+                    select pvm;
 
         var productVideos = await query.ToListAsync();
 
