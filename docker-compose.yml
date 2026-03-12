@@ -18,6 +18,8 @@ services:
       SA_PASSWORD: "nopCommerce_db_password"
       ACCEPT_EULA: "Y"
       MSSQL_PID: "Express"
+    volumes:
+      - nopcommerce_db_data:/var/opt/mssql
 
   telemetry_service:
     image: otel/opentelemetry-collector-contrib:latest
@@ -59,3 +61,4 @@ services:
 
 volumes:
   nopcommerce_data:
+  nopcommerce_db_data:
