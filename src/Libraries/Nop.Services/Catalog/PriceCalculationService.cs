@@ -1,4 +1,6 @@
-﻿using Nop.Core.Caching;
+﻿using System.Diagnostics;
+using Nop.Core.Telemetry;
+using Nop.Core.Caching;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.Customers;
 using Nop.Core.Domain.Directory;
@@ -16,6 +18,9 @@ namespace Nop.Services.Catalog;
 public partial class PriceCalculationService : IPriceCalculationService
 {
     #region Fields
+
+    private static readonly ActivitySource _activitySource = 
+            new("Nop.Services.Catalog.PriceCalculation");
 
     protected readonly CatalogSettings _catalogSettings;
     protected readonly CurrencySettings _currencySettings;
@@ -233,6 +238,13 @@ public partial class PriceCalculationService : IPriceCalculationService
         Customer customer,
         decimal productPriceWithoutDiscount)
     {
+        using var activity = _activitySource.StartActivity("PriceCalculation.GetDiscountAmount");
+    
+        activity?.SetTag("product.id", product.Id);
+        activity?.SetTag("price_before_discount", productPriceWithoutDiscount);
+
+        var stopwatch = Stopwatch.StartNew();
+
         ArgumentNullException.ThrowIfNull(product);
 
         var appliedDiscounts = new List<Discount>();
@@ -253,6 +265,9 @@ public partial class PriceCalculationService : IPriceCalculationService
             return (appliedDiscountAmount, appliedDiscounts);
 
         appliedDiscounts = _discountService.GetPreferredDiscount(allowedDiscounts, productPriceWithoutDiscount, out appliedDiscountAmount);
+
+        stopwatch.Stop();
+        activity?.SetTag("discount_calculation.duration_ms", stopwatch.ElapsedMilliseconds);
 
         return (appliedDiscountAmount, appliedDiscounts);
     }
@@ -330,7 +345,8 @@ public partial class PriceCalculationService : IPriceCalculationService
     /// A task that represents the asynchronous operation
     /// The task result contains the final price without discounts, Final price, Applied discount amount, Applied discounts
     /// </returns>
-    public virtual async Task<(decimal priceWithoutDiscounts, decimal finalPrice, decimal appliedDiscountAmount, List<Discount> appliedDiscounts)> GetFinalPriceAsync(Product product,
+    public virtual async Task<(decimal priceWithoutDiscounts, decimal finalPrice, decimal appliedDiscountAmount, List<Discount> appliedDiscounts)> GetFinalPriceAsync(
+        Product product,
         Customer customer,
         Store store,
         decimal? overriddenProductPrice,
@@ -340,76 +356,129 @@ public partial class PriceCalculationService : IPriceCalculationService
         DateTime? rentalStartDate,
         DateTime? rentalEndDate)
     {
-        ArgumentNullException.ThrowIfNull(product);
-
-        var cacheKey = _staticCacheManager.PrepareKeyForDefaultCache(NopCatalogDefaults.ProductPriceCacheKey,
-            product,
-            overriddenProductPrice,
-            additionalCharge,
-            includeDiscounts,
-            quantity,
-            await _customerService.GetCustomerRoleIdsAsync(customer),
-            store);
-
-        //we do not cache price if this not allowed by settings or if the product is rental product
-        //otherwise, it can cause memory leaks (to store all possible date period combinations)
-        if (!_catalogSettings.CacheProductPrices || product.IsRental)
-            cacheKey.CacheTime = 0;
-
-        decimal rezPrice;
-        decimal rezPriceWithoutDiscount;
-        decimal discountAmount;
-        List<Discount> appliedDiscounts;
-
-        (rezPriceWithoutDiscount, rezPrice, discountAmount, appliedDiscounts) = await _staticCacheManager.GetAsync(cacheKey, async () =>
+        using var activity = _activitySource.StartActivity("PriceCalculation.GetFinalPrice");
+        
+        try
         {
-            var discounts = new List<Discount>();
-            var appliedDiscountAmount = decimal.Zero;
+            activity?.SetTag("product.id", product.Id);
+            activity?.SetTag("product.name", product.Name);
+            activity?.SetTag("product.base_price", product.Price);
+            activity?.SetTag("customer.id", customer?.Id);
+            activity?.SetTag("store.id", store?.Id);
+            activity?.SetTag("quantity", quantity);
+            activity?.SetTag("include_discounts", includeDiscounts);
+            activity?.SetTag("product.is_rental", product.IsRental);
+            
+            if (overriddenProductPrice.HasValue)
+                activity?.SetTag("price.overridden", overriddenProductPrice.Value);
+            
+            activity?.AddEvent(new ActivityEvent("PriceCalculationStarted"));
+            
+            var stopwatch = Stopwatch.StartNew();
+            
+            ArgumentNullException.ThrowIfNull(product);
 
-            //initial price
-            var price = overriddenProductPrice ?? product.Price;
+            var cacheKey = _staticCacheManager.PrepareKeyForDefaultCache(NopCatalogDefaults.ProductPriceCacheKey,
+                product,
+                overriddenProductPrice,
+                additionalCharge,
+                includeDiscounts,
+                quantity,
+                await _customerService.GetCustomerRoleIdsAsync(customer),
+                store);
 
-            //tier prices
-            var tierPrice = await _productService.GetPreferredTierPriceAsync(product, customer, store, quantity);
+            //we do not cache price if this not allowed by settings or if the product is rental product
+            //otherwise, it can cause memory leaks (to store all possible date period combinations)
+            if (!_catalogSettings.CacheProductPrices || product.IsRental)
+                cacheKey.CacheTime = 0;
 
-            if (tierPrice != null)
-                price = tierPrice.Price;
+            decimal rezPrice;
+            decimal rezPriceWithoutDiscount;
+            decimal discountAmount;
+            List<Discount> appliedDiscounts;
 
-            //additional charge
-            price += additionalCharge;
-
-            //rental products
-            if (product.IsRental)
+            (rezPriceWithoutDiscount, rezPrice, discountAmount, appliedDiscounts) = await _staticCacheManager.GetAsync(cacheKey, async () =>
             {
-                if (rentalStartDate.HasValue && rentalEndDate.HasValue)
-                    price *= _productService.GetRentalPeriods(product, rentalStartDate.Value, rentalEndDate.Value);
-            }
+                var discounts = new List<Discount>();
+                var appliedDiscountAmount = decimal.Zero;
 
-            var priceWithoutDiscount = price;
+                //initial price
+                var price = overriddenProductPrice ?? product.Price;
 
-            if (includeDiscounts)
-            {
-                //discount
-                var (tmpDiscountAmount, tmpAppliedDiscounts) = await GetDiscountAmountAsync(product, customer, price);
-                price -= tmpDiscountAmount;
+                //tier prices
+                var tierPrice = await _productService.GetPreferredTierPriceAsync(product, customer, store, quantity);
 
-                if (tmpAppliedDiscounts?.Any() ?? false)
+                if (tierPrice != null)
                 {
-                    discounts.AddRange(tmpAppliedDiscounts);
-                    appliedDiscountAmount = tmpDiscountAmount;
+                    activity?.SetTag("price.tier_applied", true);
+                    activity?.SetTag("price.tier_quantity", tierPrice.Quantity);
+                    price = tierPrice.Price;
                 }
-            }
 
-            if (price < decimal.Zero)
-                price = decimal.Zero;
+                //additional charge
+                if (additionalCharge > 0)
+                {
+                    price += additionalCharge;
+                    activity?.SetTag("price.additional_charge", additionalCharge);
+                }
 
-            if (priceWithoutDiscount < decimal.Zero)
-                priceWithoutDiscount = decimal.Zero;
+                //rental products
+                if (product.IsRental && rentalStartDate.HasValue && rentalEndDate.HasValue)
+                {
+                    var periods = _productService.GetRentalPeriods(product, rentalStartDate.Value, rentalEndDate.Value);
+                    price *= periods;
+                    activity?.SetTag("price.rental_periods", periods);
+                }
 
-            return (priceWithoutDiscount, price, appliedDiscountAmount, discounts);
-        });
+                var priceWithoutDiscount = price;
 
-        return (rezPriceWithoutDiscount, rezPrice, discountAmount, appliedDiscounts);
+                if (includeDiscounts)
+                {
+                    //discount
+                    var (tmpDiscountAmount, tmpAppliedDiscounts) = await GetDiscountAmountAsync(product, customer, price);
+                    price -= tmpDiscountAmount;
+
+                    if (tmpAppliedDiscounts?.Any() ?? false)
+                    {
+                        discounts.AddRange(tmpAppliedDiscounts);
+                        appliedDiscountAmount = tmpDiscountAmount;
+                        activity?.SetTag("discount.applied", true);
+                        activity?.SetTag("discount.amount", tmpDiscountAmount);
+                        activity?.SetTag("discount.count", tmpAppliedDiscounts.Count);
+                    }
+                }
+
+                if (price < decimal.Zero)
+                    price = decimal.Zero;
+
+                if (priceWithoutDiscount < decimal.Zero)
+                    priceWithoutDiscount = decimal.Zero;
+
+                return (priceWithoutDiscount, price, appliedDiscountAmount, discounts);
+            });
+
+            stopwatch.Stop();
+            
+            activity?.SetTag("price.final", rezPrice);
+            activity?.SetTag("price.original", rezPriceWithoutDiscount);
+            activity?.SetTag("price.discount_amount", discountAmount);
+            activity?.SetTag("calculation.duration_ms", stopwatch.ElapsedMilliseconds);
+            
+            // Métrica
+            TelemetryMetrics.ProductPriceCalculationDurationMs.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("product.id", product.Id));
+            
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            
+            return (rezPriceWithoutDiscount, rezPrice, discountAmount, appliedDiscounts);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("error.message", ex.Message);
+            throw;
+        }
     }
 
     /// <summary>

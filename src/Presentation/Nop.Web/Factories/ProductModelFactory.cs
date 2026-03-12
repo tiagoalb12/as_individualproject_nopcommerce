@@ -2,7 +2,9 @@
 using System.Net;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using Newtonsoft.Json;
+using System.Diagnostics;
 using Nop.Core;
+using Nop.Core.Telemetry;
 using Nop.Core.Caching;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.Customers;
@@ -42,6 +44,9 @@ namespace Nop.Web.Factories;
 public partial class ProductModelFactory : IProductModelFactory
 {
     #region Fields
+
+    private static readonly ActivitySource _activitySource = 
+        new("Nop.Web.ProductModelFactory");
 
     protected readonly CaptchaSettings _captchaSettings;
     protected readonly CatalogSettings _catalogSettings;
@@ -1438,238 +1443,258 @@ public partial class ProductModelFactory : IProductModelFactory
     public virtual async Task<ProductDetailsModel> PrepareProductDetailsModelAsync(Product product,
         ShoppingCartItem updatecartitem = null, bool isAssociatedProduct = false)
     {
-        ArgumentNullException.ThrowIfNull(product);
-
-        //standard properties
-        var model = new ProductDetailsModel
+        using var activity = _activitySource.StartActivity("ProductModelFactory.PrepareProductDetails");
+        
+        activity?.SetTag("product.id", product.Id);
+        activity?.SetTag("product.name", product.Name);
+        activity?.SetTag("is_associated_product", isAssociatedProduct);
+        
+        var stopwatch = Stopwatch.StartNew();
+        
+        try
         {
-            Id = product.Id,
-            Name = await _localizationService.GetLocalizedAsync(product, x => x.Name),
-            ShortDescription = await _localizationService.GetLocalizedAsync(product, x => x.ShortDescription),
-            FullDescription = await _localizationService.GetLocalizedAsync(product, x => x.FullDescription),
-            MetaKeywords = await _localizationService.GetLocalizedAsync(product, x => x.MetaKeywords),
-            MetaDescription = await _localizationService.GetLocalizedAsync(product, x => x.MetaDescription),
-            MetaTitle = await _localizationService.GetLocalizedAsync(product, x => x.MetaTitle),
-            SeName = await _urlRecordService.GetSeNameAsync(product),
-            ProductType = product.ProductType,
-            ShowSku = _catalogSettings.ShowSkuOnProductDetailsPage,
-            Sku = product.Sku,
-            ShowManufacturerPartNumber = _catalogSettings.ShowManufacturerPartNumber,
-            FreeShippingNotificationEnabled = _catalogSettings.ShowFreeShippingNotification,
-            ManufacturerPartNumber = product.ManufacturerPartNumber,
-            ShowGtin = _catalogSettings.ShowGtin,
-            Gtin = product.Gtin,
-            ManageInventoryMethod = product.ManageInventoryMethod,
-            StockAvailability = await _productService.FormatStockMessageAsync(product, string.Empty),
-            HasSampleDownload = product.IsDownload && product.HasSampleDownload,
-            DisplayDiscontinuedMessage = !product.Published && _catalogSettings.DisplayDiscontinuedMessageForUnpublishedProducts,
-            AvailableEndDate = product.AvailableEndDateTimeUtc,
-            VisibleIndividually = product.VisibleIndividually,
-            AllowAddingOnlyExistingAttributeCombinations = product.AllowAddingOnlyExistingAttributeCombinations,
-            DisplayAttributeCombinationImagesOnly = product.DisplayAttributeCombinationImagesOnly
-        };
+            ArgumentNullException.ThrowIfNull(product);
 
-        //automatically generate product description?
-        if (_seoSettings.GenerateProductMetaDescription && string.IsNullOrEmpty(model.MetaDescription))
-        {
-            //based on short description
-            model.MetaDescription = model.ShortDescription;
-        }
+            ArgumentNullException.ThrowIfNull(product);
 
-        //shipping info
-        model.IsShipEnabled = product.IsShipEnabled;
-        if (product.IsShipEnabled)
-        {
-            model.IsFreeShipping = product.IsFreeShipping;
-            //delivery date
-            var deliveryDate = await _dateRangeService.GetDeliveryDateByIdAsync(product.DeliveryDateId);
-            if (deliveryDate != null)
-                model.DeliveryDate = await _localizationService.GetLocalizedAsync(deliveryDate, dd => dd.Name);
-        }
-
-        var store = await _storeContext.GetCurrentStoreAsync();
-        //email a friend
-        model.EmailAFriendEnabled = _catalogSettings.EmailAFriendEnabled;
-        //compare products
-        model.CompareProductsEnabled = _catalogSettings.CompareProductsEnabled;
-        //store name
-        model.CurrentStoreName = await _localizationService.GetLocalizedAsync(store, x => x.Name);
-
-        //vendor details
-        if (_vendorSettings.ShowVendorOnProductDetailsPage)
-        {
-            var vendor = await _vendorService.GetVendorByIdAsync(product.VendorId);
-            if (vendor != null && !vendor.Deleted && vendor.Active)
+            //standard properties
+            var model = new ProductDetailsModel
             {
-                model.ShowVendor = true;
-
-                model.VendorModel = new VendorBriefInfoModel
-                {
-                    Id = vendor.Id,
-                    Name = await _localizationService.GetLocalizedAsync(vendor, x => x.Name),
-                    SeName = await _urlRecordService.GetSeNameAsync(vendor),
-                };
-            }
-        }
-
-        //page sharing
-        if (_catalogSettings.ShowShareButton && !string.IsNullOrEmpty(_catalogSettings.PageShareCode))
-        {
-            var shareCode = _catalogSettings.PageShareCode;
-            if (_webHelper.IsCurrentConnectionSecured())
-            {
-                //need to change the add this link to be https linked when the page is, so that the page doesn't ask about mixed mode when viewed in https...
-                shareCode = shareCode.Replace("http://", "https://");
-            }
-
-            model.PageShareCode = shareCode;
-        }
-
-        switch (product.ManageInventoryMethod)
-        {
-            case ManageInventoryMethod.DontManageStock:
-                model.InStock = true;
-                break;
-
-            case ManageInventoryMethod.ManageStock:
-                model.InStock = product.BackorderMode != BackorderMode.NoBackorders
-                                || await _productService.GetTotalStockQuantityAsync(product) > 0;
-                model.DisplayBackInStockSubscription = !model.InStock && product.AllowBackInStockSubscriptions;
-                break;
-
-            case ManageInventoryMethod.ManageStockByAttributes:
-                model.InStock = (await _productAttributeService
-                                    .GetAllProductAttributeCombinationsAsync(product.Id))
-                                ?.Any(c => c.StockQuantity > 0 || c.AllowOutOfStockOrders)
-                                ?? false;
-                break;
-        }
-
-        //breadcrumb
-        //do not prepare this model for the associated products. anyway it's not used
-        if (_catalogSettings.CategoryBreadcrumbEnabled && !isAssociatedProduct)
-            model.Breadcrumb = await PrepareProductBreadcrumbModelAsync(product);
-
-        //product tags
-        //do not prepare this model for the associated products. anyway it's not used
-        if (!isAssociatedProduct)
-            model.ProductTags = await PrepareProductTagModelsAsync(product);
-
-        //pictures and videos
-        model.DefaultPictureZoomEnabled = _mediaSettings.DefaultPictureZoomEnabled;
-        IList<PictureModel> allPictureModels;
-        IList<VideoModel> allVideoModels;
-        (model.DefaultPictureModel, allPictureModels, allVideoModels) = await PrepareProductDetailsPictureModelAsync(product, isAssociatedProduct);
-        model.PictureModels = allPictureModels;
-        model.VideoModels = allVideoModels;
-
-        //price
-        model.ProductPrice = await PrepareProductPriceModelAsync(product);
-
-        //'Add to cart' model
-        model.AddToCart = await PrepareProductAddToCartModelAsync(product, updatecartitem);
-        var customer = await _workContext.GetCurrentCustomerAsync();
-        //gift card
-        if (product.IsGiftCard)
-        {
-            model.GiftCard.IsGiftCard = true;
-            model.GiftCard.GiftCardType = product.GiftCardType;
-
-            if (updatecartitem == null)
-            {
-                model.GiftCard.SenderName = await _customerService.GetCustomerFullNameAsync(customer);
-                model.GiftCard.SenderEmail = customer.Email;
-            }
-            else
-            {
-                _productAttributeParser.GetGiftCardAttribute(updatecartitem.AttributesXml,
-                    out var giftCardRecipientName, out var giftCardRecipientEmail,
-                    out var giftCardSenderName, out var giftCardSenderEmail, out var giftCardMessage);
-
-                model.GiftCard.RecipientName = giftCardRecipientName;
-                model.GiftCard.RecipientEmail = giftCardRecipientEmail;
-                model.GiftCard.SenderName = giftCardSenderName;
-                model.GiftCard.SenderEmail = giftCardSenderEmail;
-                model.GiftCard.Message = giftCardMessage;
-            }
-        }
-
-        //product attributes
-        model.ProductAttributes = await PrepareProductAttributeModelsAsync(product, updatecartitem);
-
-        //product specifications
-        //do not prepare this model for the associated products. anyway it's not used
-        if (!isAssociatedProduct)
-            model.ProductSpecificationModel = await PrepareProductSpecificationModelAsync(product);
-
-        //product review overview
-        model.ProductReviewOverview = await PrepareProductReviewOverviewModelAsync(product);
-
-        model.ProductReviews = await PrepareProductReviewsModelAsync(product);
-
-        if (await _permissionService.AuthorizeAsync(StandardPermission.PublicStore.DISPLAY_PRICES))
-            model.TierPrices = await PrepareProductTierPriceModelsAsync(product);
-
-        //manufacturers
-        model.ProductManufacturers = await PrepareProductManufacturerModelsAsync(product);
-
-        //rental products
-        if (product.IsRental)
-        {
-            model.IsRental = true;
-            //set already entered dates attributes (if we're going to update the existing shopping cart item)
-            if (updatecartitem != null)
-            {
-                model.RentalStartDate = updatecartitem.RentalStartDateUtc;
-                model.RentalEndDate = updatecartitem.RentalEndDateUtc;
-            }
-        }
-
-        //estimate shipping
-        if (_shippingSettings.EstimateShippingProductPageEnabled && !model.IsFreeShipping)
-        {
-            var wrappedProduct = new ShoppingCartItem
-            {
-                StoreId = store.Id,
-                ShoppingCartTypeId = (int)ShoppingCartType.ShoppingCart,
-                CustomerId = customer.Id,
-                ProductId = product.Id,
-                CreatedOnUtc = DateTime.UtcNow
+                Id = product.Id,
+                Name = await _localizationService.GetLocalizedAsync(product, x => x.Name),
+                ShortDescription = await _localizationService.GetLocalizedAsync(product, x => x.ShortDescription),
+                FullDescription = await _localizationService.GetLocalizedAsync(product, x => x.FullDescription),
+                MetaKeywords = await _localizationService.GetLocalizedAsync(product, x => x.MetaKeywords),
+                MetaDescription = await _localizationService.GetLocalizedAsync(product, x => x.MetaDescription),
+                MetaTitle = await _localizationService.GetLocalizedAsync(product, x => x.MetaTitle),
+                SeName = await _urlRecordService.GetSeNameAsync(product),
+                ProductType = product.ProductType,
+                ShowSku = _catalogSettings.ShowSkuOnProductDetailsPage,
+                Sku = product.Sku,
+                ShowManufacturerPartNumber = _catalogSettings.ShowManufacturerPartNumber,
+                FreeShippingNotificationEnabled = _catalogSettings.ShowFreeShippingNotification,
+                ManufacturerPartNumber = product.ManufacturerPartNumber,
+                ShowGtin = _catalogSettings.ShowGtin,
+                Gtin = product.Gtin,
+                ManageInventoryMethod = product.ManageInventoryMethod,
+                StockAvailability = await _productService.FormatStockMessageAsync(product, string.Empty),
+                HasSampleDownload = product.IsDownload && product.HasSampleDownload,
+                DisplayDiscontinuedMessage = !product.Published && _catalogSettings.DisplayDiscontinuedMessageForUnpublishedProducts,
+                AvailableEndDate = product.AvailableEndDateTimeUtc,
+                VisibleIndividually = product.VisibleIndividually,
+                AllowAddingOnlyExistingAttributeCombinations = product.AllowAddingOnlyExistingAttributeCombinations,
+                DisplayAttributeCombinationImagesOnly = product.DisplayAttributeCombinationImagesOnly
             };
 
-            var estimateShippingModel = await _shoppingCartModelFactory.PrepareEstimateShippingModelAsync(new[] { wrappedProduct });
-
-            model.ProductEstimateShipping.ProductId = product.Id;
-            model.ProductEstimateShipping.RequestDelay = estimateShippingModel.RequestDelay;
-            model.ProductEstimateShipping.Enabled = estimateShippingModel.Enabled;
-            model.ProductEstimateShipping.CountryId = estimateShippingModel.CountryId;
-            model.ProductEstimateShipping.StateProvinceId = estimateShippingModel.StateProvinceId;
-            model.ProductEstimateShipping.ZipPostalCode = estimateShippingModel.ZipPostalCode;
-            model.ProductEstimateShipping.UseCity = estimateShippingModel.UseCity;
-            model.ProductEstimateShipping.City = estimateShippingModel.City;
-            model.ProductEstimateShipping.AvailableCountries = estimateShippingModel.AvailableCountries;
-            model.ProductEstimateShipping.AvailableStates = estimateShippingModel.AvailableStates;
-        }
-
-        //associated products
-        if (product.ProductType == ProductType.GroupedProduct)
-        {
-            //ensure no circular references
-            if (!isAssociatedProduct)
+            //automatically generate product description?
+            if (_seoSettings.GenerateProductMetaDescription && string.IsNullOrEmpty(model.MetaDescription))
             {
-                var associatedProducts = await _productService.GetAssociatedProductsAsync(product.Id, store.Id);
-                foreach (var associatedProduct in associatedProducts)
-                    model.AssociatedProducts.Add(await PrepareProductDetailsModelAsync(associatedProduct, null, true));
+                //based on short description
+                model.MetaDescription = model.ShortDescription;
             }
-            model.InStock = model.AssociatedProducts.Any(associatedProduct => associatedProduct.InStock);
-        }
-        if (_seoSettings.MicrodataEnabled)
-        {
-            var jsonLdModel = await _jsonLdModelFactory.PrepareJsonLdProductAsync(model);
-            model.JsonLd = JsonConvert.SerializeObject(jsonLdModel, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
-        }
 
-        return model;
+            //shipping info
+            model.IsShipEnabled = product.IsShipEnabled;
+            if (product.IsShipEnabled)
+            {
+                model.IsFreeShipping = product.IsFreeShipping;
+                //delivery date
+                var deliveryDate = await _dateRangeService.GetDeliveryDateByIdAsync(product.DeliveryDateId);
+                if (deliveryDate != null)
+                    model.DeliveryDate = await _localizationService.GetLocalizedAsync(deliveryDate, dd => dd.Name);
+            }
+
+            var store = await _storeContext.GetCurrentStoreAsync();
+            //email a friend
+            model.EmailAFriendEnabled = _catalogSettings.EmailAFriendEnabled;
+            //compare products
+            model.CompareProductsEnabled = _catalogSettings.CompareProductsEnabled;
+            //store name
+            model.CurrentStoreName = await _localizationService.GetLocalizedAsync(store, x => x.Name);
+
+            //vendor details
+            if (_vendorSettings.ShowVendorOnProductDetailsPage)
+            {
+                var vendor = await _vendorService.GetVendorByIdAsync(product.VendorId);
+                if (vendor != null && !vendor.Deleted && vendor.Active)
+                {
+                    model.ShowVendor = true;
+
+                    model.VendorModel = new VendorBriefInfoModel
+                    {
+                        Id = vendor.Id,
+                        Name = await _localizationService.GetLocalizedAsync(vendor, x => x.Name),
+                        SeName = await _urlRecordService.GetSeNameAsync(vendor),
+                    };
+                }
+            }
+
+            //page sharing
+            if (_catalogSettings.ShowShareButton && !string.IsNullOrEmpty(_catalogSettings.PageShareCode))
+            {
+                var shareCode = _catalogSettings.PageShareCode;
+                if (_webHelper.IsCurrentConnectionSecured())
+                {
+                    //need to change the add this link to be https linked when the page is, so that the page doesn't ask about mixed mode when viewed in https...
+                    shareCode = shareCode.Replace("http://", "https://");
+                }
+
+                model.PageShareCode = shareCode;
+            }
+
+            switch (product.ManageInventoryMethod)
+            {
+                case ManageInventoryMethod.DontManageStock:
+                    model.InStock = true;
+                    break;
+
+                case ManageInventoryMethod.ManageStock:
+                    model.InStock = product.BackorderMode != BackorderMode.NoBackorders
+                                    || await _productService.GetTotalStockQuantityAsync(product) > 0;
+                    model.DisplayBackInStockSubscription = !model.InStock && product.AllowBackInStockSubscriptions;
+                    break;
+
+                case ManageInventoryMethod.ManageStockByAttributes:
+                    model.InStock = (await _productAttributeService
+                                        .GetAllProductAttributeCombinationsAsync(product.Id))
+                                    ?.Any(c => c.StockQuantity > 0 || c.AllowOutOfStockOrders)
+                                    ?? false;
+                    break;
+            }
+
+            //breadcrumb
+            //do not prepare this model for the associated products. anyway it's not used
+            if (_catalogSettings.CategoryBreadcrumbEnabled && !isAssociatedProduct)
+                model.Breadcrumb = await PrepareProductBreadcrumbModelAsync(product);
+
+            //product tags
+            //do not prepare this model for the associated products. anyway it's not used
+            if (!isAssociatedProduct)
+                model.ProductTags = await PrepareProductTagModelsAsync(product);
+
+            //pictures and videos
+            model.DefaultPictureZoomEnabled = _mediaSettings.DefaultPictureZoomEnabled;
+            IList<PictureModel> allPictureModels;
+            IList<VideoModel> allVideoModels;
+            (model.DefaultPictureModel, allPictureModels, allVideoModels) = await PrepareProductDetailsPictureModelAsync(product, isAssociatedProduct);
+            model.PictureModels = allPictureModels;
+            model.VideoModels = allVideoModels;
+
+            //price
+            model.ProductPrice = await PrepareProductPriceModelAsync(product);
+
+            //'Add to cart' model
+            model.AddToCart = await PrepareProductAddToCartModelAsync(product, updatecartitem);
+            var customer = await _workContext.GetCurrentCustomerAsync();
+            //gift card
+            if (product.IsGiftCard)
+            {
+                model.GiftCard.IsGiftCard = true;
+                model.GiftCard.GiftCardType = product.GiftCardType;
+
+                if (updatecartitem == null)
+                {
+                    model.GiftCard.SenderName = await _customerService.GetCustomerFullNameAsync(customer);
+                    model.GiftCard.SenderEmail = customer.Email;
+                }
+                else
+                {
+                    _productAttributeParser.GetGiftCardAttribute(updatecartitem.AttributesXml,
+                        out var giftCardRecipientName, out var giftCardRecipientEmail,
+                        out var giftCardSenderName, out var giftCardSenderEmail, out var giftCardMessage);
+
+                    model.GiftCard.RecipientName = giftCardRecipientName;
+                    model.GiftCard.RecipientEmail = giftCardRecipientEmail;
+                    model.GiftCard.SenderName = giftCardSenderName;
+                    model.GiftCard.SenderEmail = giftCardSenderEmail;
+                    model.GiftCard.Message = giftCardMessage;
+                }
+            }
+
+            //product attributes
+            model.ProductAttributes = await PrepareProductAttributeModelsAsync(product, updatecartitem);
+
+            //product specifications
+            //do not prepare this model for the associated products. anyway it's not used
+            if (!isAssociatedProduct)
+                model.ProductSpecificationModel = await PrepareProductSpecificationModelAsync(product);
+
+            //product review overview
+            model.ProductReviewOverview = await PrepareProductReviewOverviewModelAsync(product);
+
+            model.ProductReviews = await PrepareProductReviewsModelAsync(product);
+
+            if (await _permissionService.AuthorizeAsync(StandardPermission.PublicStore.DISPLAY_PRICES))
+                model.TierPrices = await PrepareProductTierPriceModelsAsync(product);
+
+            //manufacturers
+            model.ProductManufacturers = await PrepareProductManufacturerModelsAsync(product);
+
+            //rental products
+            if (product.IsRental)
+            {
+                model.IsRental = true;
+                //set already entered dates attributes (if we're going to update the existing shopping cart item)
+                if (updatecartitem != null)
+                {
+                    model.RentalStartDate = updatecartitem.RentalStartDateUtc;
+                    model.RentalEndDate = updatecartitem.RentalEndDateUtc;
+                }
+            }
+
+            //estimate shipping
+            if (_shippingSettings.EstimateShippingProductPageEnabled && !model.IsFreeShipping)
+            {
+                var wrappedProduct = new ShoppingCartItem
+                {
+                    StoreId = store.Id,
+                    ShoppingCartTypeId = (int)ShoppingCartType.ShoppingCart,
+                    CustomerId = customer.Id,
+                    ProductId = product.Id,
+                    CreatedOnUtc = DateTime.UtcNow
+                };
+
+                var estimateShippingModel = await _shoppingCartModelFactory.PrepareEstimateShippingModelAsync(new[] { wrappedProduct });
+
+                model.ProductEstimateShipping.ProductId = product.Id;
+                model.ProductEstimateShipping.RequestDelay = estimateShippingModel.RequestDelay;
+                model.ProductEstimateShipping.Enabled = estimateShippingModel.Enabled;
+                model.ProductEstimateShipping.CountryId = estimateShippingModel.CountryId;
+                model.ProductEstimateShipping.StateProvinceId = estimateShippingModel.StateProvinceId;
+                model.ProductEstimateShipping.ZipPostalCode = estimateShippingModel.ZipPostalCode;
+                model.ProductEstimateShipping.UseCity = estimateShippingModel.UseCity;
+                model.ProductEstimateShipping.City = estimateShippingModel.City;
+                model.ProductEstimateShipping.AvailableCountries = estimateShippingModel.AvailableCountries;
+                model.ProductEstimateShipping.AvailableStates = estimateShippingModel.AvailableStates;
+            }
+
+            //associated products
+            if (product.ProductType == ProductType.GroupedProduct)
+            {
+                //ensure no circular references
+                if (!isAssociatedProduct)
+                {
+                    var associatedProducts = await _productService.GetAssociatedProductsAsync(product.Id, store.Id);
+                    foreach (var associatedProduct in associatedProducts)
+                        model.AssociatedProducts.Add(await PrepareProductDetailsModelAsync(associatedProduct, null, true));
+                }
+                model.InStock = model.AssociatedProducts.Any(associatedProduct => associatedProduct.InStock);
+            }
+            if (_seoSettings.MicrodataEnabled)
+            {
+                var jsonLdModel = await _jsonLdModelFactory.PrepareJsonLdProductAsync(model);
+                model.JsonLd = JsonConvert.SerializeObject(jsonLdModel, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
+            }
+
+            return model;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("success", false);
+            activity?.SetTag("error.message", ex.Message);
+            throw;
+        }
     }
 
     /// <summary>

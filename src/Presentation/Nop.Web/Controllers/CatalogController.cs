@@ -124,8 +124,10 @@ public partial class CatalogController : BasePublicController
         try
         {
             activity?.SetTag("http.method", "GET");
-            activity?.SetTag("http.endpoint", "/category");
+            activity?.SetTag("http.target", "/category");
             activity?.SetTag("category.id", categoryId);
+            activity?.SetTag("http.host", Request.Host.Value);
+            activity?.SetTag("http.user_agent", Request.Headers["User-Agent"]);
             
             var stopwatch = Stopwatch.StartNew();
             
@@ -409,6 +411,9 @@ public partial class CatalogController : BasePublicController
         try
         {
             activity?.SetTag("http.method", "GET");
+            activity?.SetTag("http.target", "/search");
+            activity?.SetTag("http.scheme", "http");
+            activity?.SetTag("http.flavor", "1.1");
             activity?.SetTag("http.endpoint", "/search");
             activity?.SetTag("search.term", model?.q ?? "[empty]");
             activity?.SetTag("search.category_id", model?.cid ?? 0);
