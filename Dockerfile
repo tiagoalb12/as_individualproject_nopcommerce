@@ -48,13 +48,7 @@ WORKDIR /app
 
 COPY --from=build /app/published .
 
-#COPY ./wait-for-db.sh /app/wait-for-db.sh
-
-#RUN chmod +x /app/wait-for-db.sh
-
 ENV ASPNETCORE_URLS=http://+:80
 EXPOSE 80
                             
 ENTRYPOINT ["dotnet", "Nop.Web.dll"]
-
-#ENTRYPOINT ["/bin/sh", "/app/wait-for-db.sh", "dotnet", "Nop.Web.dll"]

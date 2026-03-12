@@ -1,5 +1,6 @@
 ﻿using System.Data.SqlTypes;
 using System.Diagnostics;
+using Nop.Core.Telemetry;
 using Nop.Core;
 using Nop.Core.Caching;
 using Nop.Core.Domain.Catalog;
@@ -555,7 +556,28 @@ public partial class ProductService : IProductService
     /// </returns>
     public virtual async Task<Product> GetProductByIdAsync(int productId)
     {
-        return await _productRepository.GetByIdAsync(productId, cache => default);
+        using var activity = ActivitySource.StartActivity("Catalogue.GetProductById");
+        
+        activity?.SetTag("catalog.product_id", productId);
+        
+        var stopwatch = Stopwatch.StartNew();
+        
+        var product = await _productRepository.GetByIdAsync(productId, cache => default);
+        
+        stopwatch.Stop();
+        
+        activity?.SetTag("catalog.product_found", product != null);
+        activity?.SetTag("catalog.cache_hit", false);
+        activity?.SetTag("catalog.db_duration_ms", stopwatch.ElapsedMilliseconds);
+        
+        if (product != null)
+        {
+            TelemetryMetrics.ProductDetailsLoadDurationMs.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("product_id", productId));
+        }
+        
+        return product;
     }
 
     /// <summary>
@@ -835,6 +857,8 @@ public partial class ProductService : IProductService
     {
         // SPAN - operação de pesquisa de produtos
         using var activity = ActivitySource.StartActivity("Catalogue.SearchProducts");
+
+        var stopwatch = Stopwatch.StartNew();
 
         activity?.SetTag("catalog.page_index", pageIndex);
         activity?.SetTag("catalog.page_size", pageSize);
@@ -1166,7 +1190,19 @@ public partial class ProductService : IProductService
                 .OrderBy(_localizedPropertyRepository, await _workContext.GetWorkingLanguageAsync(), orderBy)
                 .ToPagedListAsync(pageIndex, pageSize);
 
+            stopwatch.Stop();
+
             activity?.SetTag("catalog.result_count", result.TotalCount);
+            activity?.SetTag("catalog.duration_ms", stopwatch.ElapsedMilliseconds);
+
+            // Métricas costumizadas já definidas no TelemetryMetrics
+            TelemetryMetrics.SearchDurationMs.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("has_results", result.TotalCount > 0));
+
+            TelemetryMetrics.SearchResultsCount.Record(
+                result.TotalCount,
+                new KeyValuePair<string, object?>("search_term_provided", !string.IsNullOrEmpty(keywords)));
 
             activity?.SetStatus(ActivityStatusCode.Ok);
 
@@ -1175,6 +1211,10 @@ public partial class ProductService : IProductService
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+
+            TelemetryMetrics.SearchErrors.Add(1,
+                new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
+
             throw;
         }
     }
@@ -1577,10 +1617,15 @@ public partial class ProductService : IProductService
     /// </returns>
     public virtual async Task<string> FormatStockMessageAsync(Product product, string attributesXml)
     {
-        ArgumentNullException.ThrowIfNull(product);
-
+        using var activity = ActivitySource.StartActivity("Catalogue.FormatStockMessage");
+        
+        activity?.SetTag("catalog.product_id", product.Id);
+        activity?.SetTag("catalog.manage_inventory", product.ManageInventoryMethod.ToString());
+        
+        var stopwatch = Stopwatch.StartNew();
+        
         var stockMessage = string.Empty;
-
+        
         switch (product.ManageInventoryMethod)
         {
             case ManageInventoryMethod.ManageStock:
@@ -1590,7 +1635,12 @@ public partial class ProductService : IProductService
                 stockMessage = await GetStockMessageForAttributesAsync(product, attributesXml);
                 break;
         }
-
+        
+        stopwatch.Stop();
+        
+        activity?.SetTag("catalog.stock_message_length", stockMessage?.Length ?? 0);
+        activity?.SetTag("catalog.duration_ms", stopwatch.ElapsedMilliseconds);
+        
         return stockMessage;
     }
 

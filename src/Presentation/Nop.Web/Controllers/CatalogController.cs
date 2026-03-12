@@ -1,5 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Nop.Core;
+using System.Diagnostics;
+using Nop.Core.Telemetry;
 using Nop.Core.Domain.Catalog;
 using Nop.Core.Domain.FilterLevels;
 using Nop.Core.Domain.Media;
@@ -28,6 +30,9 @@ namespace Nop.Web.Controllers;
 public partial class CatalogController : BasePublicController
 {
     #region Fields
+
+    private static readonly ActivitySource _activitySource = 
+        new("Nop.Web.CatalogController");
 
     protected readonly CatalogSettings _catalogSettings;
     protected readonly IAclService _aclService;
@@ -113,25 +118,63 @@ public partial class CatalogController : BasePublicController
     [SaveLastContinueShoppingPage]
     public virtual async Task<IActionResult> Category(int categoryId, CatalogProductsCommand command)
     {
-        var category = await _categoryService.GetCategoryByIdAsync(categoryId);
-
-        if (!await CheckCategoryAvailabilityAsync(category))
-            return InvokeHttp404();
+        // SPAN - operação de visualização de categoria
+        using var activity = _activitySource.StartActivity("CatalogController.Category", ActivityKind.Server);
         
-        //display "edit" (manage) link
-        if (await _permissionService.AuthorizeAsync(StandardPermission.Security.ACCESS_ADMIN_PANEL) && await _permissionService.AuthorizeAsync(StandardPermission.Catalog.CATEGORIES_VIEW))
-            DisplayEditLink(Url.Action("Edit", "Category", new { id = category.Id, area = AreaNames.ADMIN }));
+        try
+        {
+            activity?.SetTag("http.method", "GET");
+            activity?.SetTag("http.endpoint", "/category");
+            activity?.SetTag("category.id", categoryId);
+            
+            var stopwatch = Stopwatch.StartNew();
+            
+            var category = await _categoryService.GetCategoryByIdAsync(categoryId);
 
-        //activity log
-        await _customerActivityService.InsertActivityAsync("PublicStore.ViewCategory",
-            string.Format(await _localizationService.GetResourceAsync("ActivityLog.PublicStore.ViewCategory"), category.Name), category);
+            if (!await CheckCategoryAvailabilityAsync(category))
+            {
+                activity?.SetTag("category.available", false);
+                activity?.SetTag("http.status_code", 404);
+                return InvokeHttp404();
+            }
+            
+            activity?.SetTag("category.name", category?.Name);
+            activity?.SetTag("category.available", true);
+            
+            //display "edit" (manage) link
+            if (await _permissionService.AuthorizeAsync(StandardPermission.Security.ACCESS_ADMIN_PANEL) && 
+                await _permissionService.AuthorizeAsync(StandardPermission.Catalog.CATEGORIES_VIEW))
+                DisplayEditLink(Url.Action("Edit", "Category", new { id = category.Id, area = AreaNames.ADMIN }));
 
-        //model
-        var model = await _catalogModelFactory.PrepareCategoryModelAsync(category, command);
+            //activity log
+            await _customerActivityService.InsertActivityAsync("PublicStore.ViewCategory",
+                string.Format(await _localizationService.GetResourceAsync("ActivityLog.PublicStore.ViewCategory"), category.Name), category);
 
-        //template
-        var templateViewPath = await _catalogModelFactory.PrepareCategoryTemplateViewPathAsync(category.CategoryTemplateId);
-        return View(templateViewPath, model);
+            //model
+            var model = await _catalogModelFactory.PrepareCategoryModelAsync(category, command);
+            
+            stopwatch.Stop();
+
+            var totalCount = model?.CatalogProductsModel?.TotalItems ?? 0;
+            activity?.SetTag("category.products_count", totalCount);
+
+            // Quantos produtos vieram nesta página
+            var pageCount = model?.CatalogProductsModel?.Products?.Count ?? 0;
+            activity?.SetTag("category.page_results", pageCount);
+
+            activity?.SetTag("category.duration_ms", stopwatch.ElapsedMilliseconds);
+            activity?.SetTag("http.status_code", 200);
+            
+            //template
+            var templateViewPath = await _catalogModelFactory.PrepareCategoryTemplateViewPathAsync(category.CategoryTemplateId);
+            return View(templateViewPath, model);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("http.status_code", 500);
+            throw;
+        }
     }
 
     [HttpPost]
@@ -360,17 +403,61 @@ public partial class CatalogController : BasePublicController
     [SaveLastContinueShoppingPage]
     public virtual async Task<IActionResult> Search(SearchModel model, CatalogProductsCommand command)
     {
-        if (model == null)
-            model = new SearchModel();
+        // SPAN - operação de pesquisa de produtos
+        using var activity = _activitySource.StartActivity("CatalogController.Search", ActivityKind.Server);
+        
+        try
+        {
+            activity?.SetTag("http.method", "GET");
+            activity?.SetTag("http.endpoint", "/search");
+            activity?.SetTag("search.term", model?.q ?? "[empty]");
+            activity?.SetTag("search.category_id", model?.cid ?? 0);
+            
+            var stopwatch = Stopwatch.StartNew();
+            
+            if (model == null)
+                model = new SearchModel();
 
-        model = await _catalogModelFactory.PrepareSearchModelAsync(model, command);
+            model = await _catalogModelFactory.PrepareSearchModelAsync(model, command);
+            
+            stopwatch.Stop();
 
-        return View(model);
+            var totalCount = model?.CatalogProductsModel?.TotalItems ?? 0;
+            activity?.SetTag("search.results_count", totalCount);
+
+            // Quantos produtos vieram nesta página
+            var pageCount = model?.CatalogProductsModel?.Products?.Count ?? 0;
+            activity?.SetTag("search.page_results", pageCount);
+
+            activity?.SetTag("search.duration_ms", stopwatch.ElapsedMilliseconds);
+            activity?.SetTag("http.status_code", 200);
+
+            TelemetryMetrics.SearchDurationMs.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("endpoint", "Search"));
+            
+            return View(model);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("http.status_code", 500);
+            
+            TelemetryMetrics.SearchErrors.Add(1,
+                new KeyValuePair<string, object?>("controller", "Catalog"));
+            
+            throw;
+        }
     }
 
     [CheckLanguageSeoCode(ignore: true)]
     public virtual async Task<IActionResult> SearchTermAutoComplete(string term, int categoryId)
     {
+        using var activity = _activitySource.StartActivity("CatalogController.AutoComplete");
+    
+        activity?.SetTag("search.term", term ?? "[empty]");
+        activity?.SetTag("search.category_id", categoryId);
+
         if (string.IsNullOrWhiteSpace(term))
             return Content("");
 

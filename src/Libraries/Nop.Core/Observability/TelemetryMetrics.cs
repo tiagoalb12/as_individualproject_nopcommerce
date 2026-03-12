@@ -33,5 +33,9 @@ namespace Nop.Core.Telemetry
                 "nopcommerce_price_calculation_duration_ms",
                 unit: "ms",
                 description: "Duration of product price calculation");
+
+        public static readonly Counter<int> SearchErrors =
+            Meter.CreateCounter<int>("nopcommerce_search_errors_total",
+                description: "Total number of search errors");
     }
 }
