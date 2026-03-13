@@ -37,6 +37,18 @@ namespace Nop.Core.Telemetry
                     options.RecordException = true;
                     options.EnableConnectionLevelAttributes = true;
                 })
+                                .AddAspNetCoreInstrumentation(options =>
+                {
+                    options.RecordException = true;
+                    options.Filter = (httpContext) =>
+                    {
+                        return !httpContext.Request.Path.StartsWithSegments("/health");
+                    };
+                })
+                .AddSource("Nop.Web.CatalogController")
+                .AddSource("Nop.Services.Catalog.ProductService")
+                .AddSource("Nop.Services.Catalog.PriceCalculation")
+                .AddSource("Nop.Web.ProductModelFactory")
                 .AddSource("NopCommerce.Custom")
                 .AddOtlpExporter(options =>
                 {

@@ -405,6 +405,8 @@ public partial class CatalogController : BasePublicController
     [SaveLastContinueShoppingPage]
     public virtual async Task<IActionResult> Search(SearchModel model, CatalogProductsCommand command)
     {
+        Console.WriteLine(">>> CATALOG SEARCH CALLED <<<");
+
         // SPAN - operação de pesquisa de produtos
         using var activity = _activitySource.StartActivity("CatalogController.Search", ActivityKind.Server);
         
