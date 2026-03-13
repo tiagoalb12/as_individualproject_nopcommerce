@@ -1693,6 +1693,7 @@ public partial class ProductModelFactory : IProductModelFactory
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("success", false);
             activity?.SetTag("error.message", ex.Message);
+            activity?.SetTag("error", "true");
             throw;
         }
     }

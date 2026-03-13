@@ -239,37 +239,46 @@ public partial class PriceCalculationService : IPriceCalculationService
         decimal productPriceWithoutDiscount)
     {
         using var activity = _activitySource.StartActivity("PriceCalculation.GetDiscountAmount");
-    
-        activity?.SetTag("product.id", product.Id);
-        activity?.SetTag("price_before_discount", productPriceWithoutDiscount);
 
-        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            activity?.SetTag("product.id", product.Id);
+            activity?.SetTag("price_before_discount", productPriceWithoutDiscount);
 
-        ArgumentNullException.ThrowIfNull(product);
+            var stopwatch = Stopwatch.StartNew();
 
-        var appliedDiscounts = new List<Discount>();
-        var appliedDiscountAmount = decimal.Zero;
+            ArgumentNullException.ThrowIfNull(product);
 
-        //we don't apply discounts to products with price entered by a customer
-        if (product.CustomerEntersPrice)
+            var appliedDiscounts = new List<Discount>();
+            var appliedDiscountAmount = decimal.Zero;
+
+            //we don't apply discounts to products with price entered by a customer
+            if (product.CustomerEntersPrice)
+                return (appliedDiscountAmount, appliedDiscounts);
+
+            //discounts are disabled
+            if (_catalogSettings.IgnoreDiscounts)
+                return (appliedDiscountAmount, appliedDiscounts);
+
+            var allowedDiscounts = await GetAllowedDiscountsAsync(product, customer);
+
+            //no discounts
+            if (!allowedDiscounts.Any())
+                return (appliedDiscountAmount, appliedDiscounts);
+
+            appliedDiscounts = _discountService.GetPreferredDiscount(allowedDiscounts, productPriceWithoutDiscount, out appliedDiscountAmount);
+
+            stopwatch.Stop();
+            activity?.SetTag("discount_calculation.duration_ms", stopwatch.ElapsedMilliseconds);
+
             return (appliedDiscountAmount, appliedDiscounts);
-
-        //discounts are disabled
-        if (_catalogSettings.IgnoreDiscounts)
-            return (appliedDiscountAmount, appliedDiscounts);
-
-        var allowedDiscounts = await GetAllowedDiscountsAsync(product, customer);
-
-        //no discounts
-        if (!allowedDiscounts.Any())
-            return (appliedDiscountAmount, appliedDiscounts);
-
-        appliedDiscounts = _discountService.GetPreferredDiscount(allowedDiscounts, productPriceWithoutDiscount, out appliedDiscountAmount);
-
-        stopwatch.Stop();
-        activity?.SetTag("discount_calculation.duration_ms", stopwatch.ElapsedMilliseconds);
-
-        return (appliedDiscountAmount, appliedDiscounts);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("error", "true");
+            throw;
+        }
     }
 
     #endregion
@@ -477,6 +486,7 @@ public partial class PriceCalculationService : IPriceCalculationService
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error.message", ex.Message);
+            activity?.SetTag("error", "true");
             throw;
         }
     }

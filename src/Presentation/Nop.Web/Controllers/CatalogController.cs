@@ -175,6 +175,7 @@ public partial class CatalogController : BasePublicController
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("http.status_code", 500);
+            activity?.SetTag("error", "true");
             throw;
         }
     }
@@ -405,8 +406,6 @@ public partial class CatalogController : BasePublicController
     [SaveLastContinueShoppingPage]
     public virtual async Task<IActionResult> Search(SearchModel model, CatalogProductsCommand command)
     {
-        Console.WriteLine(">>> CATALOG SEARCH CALLED <<<");
-
         // SPAN - operação de pesquisa de produtos
         using var activity = _activitySource.StartActivity("CatalogController.Search", ActivityKind.Server);
         
@@ -449,6 +448,7 @@ public partial class CatalogController : BasePublicController
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("http.status_code", 500);
+            activity?.SetTag("error", "true");
             
             TelemetryMetrics.SearchErrors.Add(1,
                 new KeyValuePair<string, object?>("controller", "Catalog"));

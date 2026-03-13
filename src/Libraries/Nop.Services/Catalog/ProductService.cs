@@ -558,26 +558,35 @@ public partial class ProductService : IProductService
     {
         using var activity = ActivitySource.StartActivity("Catalogue.GetProductById");
         
-        activity?.SetTag("catalog.product_id", productId);
-        
-        var stopwatch = Stopwatch.StartNew();
-        
-        var product = await _productRepository.GetByIdAsync(productId, cache => default);
-        
-        stopwatch.Stop();
-        
-        activity?.SetTag("catalog.product_found", product != null);
-        activity?.SetTag("catalog.cache_hit", false);
-        activity?.SetTag("catalog.db_duration_ms", stopwatch.ElapsedMilliseconds);
-        
-        if (product != null)
+        try
         {
-            TelemetryMetrics.ProductDetailsLoadDurationMs.Record(
-                stopwatch.ElapsedMilliseconds,
-                new KeyValuePair<string, object?>("product_id", productId));
+            activity?.SetTag("catalog.product_id", productId);
+            
+            var stopwatch = Stopwatch.StartNew();
+            
+            var product = await _productRepository.GetByIdAsync(productId, cache => default);
+            
+            stopwatch.Stop();
+            
+            activity?.SetTag("catalog.product_found", product != null);
+            activity?.SetTag("catalog.cache_hit", false);
+            activity?.SetTag("catalog.db_duration_ms", stopwatch.ElapsedMilliseconds);
+            
+            if (product != null)
+            {
+                TelemetryMetrics.ProductDetailsLoadDurationMs.Record(
+                    stopwatch.ElapsedMilliseconds,
+                    new KeyValuePair<string, object?>("product_id", productId));
+            }
+            
+            return product;
         }
-        
-        return product;
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("error", "true");
+            throw;
+        }
     }
 
     /// <summary>
@@ -1211,6 +1220,7 @@ public partial class ProductService : IProductService
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("error", "true"); 
 
             TelemetryMetrics.SearchErrors.Add(1,
                 new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
@@ -1619,29 +1629,38 @@ public partial class ProductService : IProductService
     {
         using var activity = ActivitySource.StartActivity("Catalogue.FormatStockMessage");
         
-        activity?.SetTag("catalog.product_id", product.Id);
-        activity?.SetTag("catalog.manage_inventory", product.ManageInventoryMethod.ToString());
-        
-        var stopwatch = Stopwatch.StartNew();
-        
-        var stockMessage = string.Empty;
-        
-        switch (product.ManageInventoryMethod)
+        try
         {
-            case ManageInventoryMethod.ManageStock:
-                stockMessage = await GetStockMessageAsync(product);
-                break;
-            case ManageInventoryMethod.ManageStockByAttributes:
-                stockMessage = await GetStockMessageForAttributesAsync(product, attributesXml);
-                break;
+            activity?.SetTag("catalog.product_id", product.Id);
+            activity?.SetTag("catalog.manage_inventory", product.ManageInventoryMethod.ToString());
+            
+            var stopwatch = Stopwatch.StartNew();
+            
+            var stockMessage = string.Empty;
+            
+            switch (product.ManageInventoryMethod)
+            {
+                case ManageInventoryMethod.ManageStock:
+                    stockMessage = await GetStockMessageAsync(product);
+                    break;
+                case ManageInventoryMethod.ManageStockByAttributes:
+                    stockMessage = await GetStockMessageForAttributesAsync(product, attributesXml);
+                    break;
+            }
+            
+            stopwatch.Stop();
+            
+            activity?.SetTag("catalog.stock_message_length", stockMessage?.Length ?? 0);
+            activity?.SetTag("catalog.duration_ms", stopwatch.ElapsedMilliseconds);
+            
+            return stockMessage;
         }
-        
-        stopwatch.Stop();
-        
-        activity?.SetTag("catalog.stock_message_length", stockMessage?.Length ?? 0);
-        activity?.SetTag("catalog.duration_ms", stopwatch.ElapsedMilliseconds);
-        
-        return stockMessage;
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("error", "true");
+            throw;
+        }
     }
 
     /// <summary>
