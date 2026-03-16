@@ -576,7 +576,8 @@ public partial class ProductService : IProductService
             {
                 TelemetryMetrics.ProductDetailsLoadDurationMs.Record(
                     stopwatch.ElapsedMilliseconds,
-                    new KeyValuePair<string, object?>("product_id", productId));
+                    new KeyValuePair<string, object?>("product_id", productId),
+                    new KeyValuePair<string, object?>("product_name", product.Name));
             }
             
             return product;

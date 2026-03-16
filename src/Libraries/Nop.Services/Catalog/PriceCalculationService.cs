@@ -476,7 +476,8 @@ public partial class PriceCalculationService : IPriceCalculationService
             // Métrica
             TelemetryMetrics.ProductPriceCalculationDurationMs.Record(
                 stopwatch.ElapsedMilliseconds,
-                new KeyValuePair<string, object?>("product.id", product.Id));
+                new KeyValuePair<string, object?>("product.id", product.Id),
+                new KeyValuePair<string, object?>("product.name", product.Name));
             
             activity?.SetStatus(ActivityStatusCode.Ok);
             
