@@ -48,6 +48,8 @@ public partial class ProductModelFactory : IProductModelFactory
     private static readonly ActivitySource _activitySource = 
         new("Nop.Web.ProductModelFactory");
 
+    private readonly ILogger<ProductModelFactory> _logger;
+
     protected readonly CaptchaSettings _captchaSettings;
     protected readonly CatalogSettings _catalogSettings;
     protected readonly CustomerSettings _customerSettings;
@@ -139,7 +141,9 @@ public partial class ProductModelFactory : IProductModelFactory
         OrderSettings orderSettings,
         SeoSettings seoSettings,
         ShippingSettings shippingSettings,
-        VendorSettings vendorSettings)
+        VendorSettings vendorSettings,
+        ILogger<ProductModelFactory> logger  // Logger
+        )
     {
         _captchaSettings = captchaSettings;
         _catalogSettings = catalogSettings;
@@ -184,6 +188,7 @@ public partial class ProductModelFactory : IProductModelFactory
         _shippingSettings = shippingSettings;
         _vendorSettings = vendorSettings;
         _videoService = videoService;
+        _logger = logger;   // Assign logger
     }
 
     #endregion
@@ -1443,6 +1448,8 @@ public partial class ProductModelFactory : IProductModelFactory
     public virtual async Task<ProductDetailsModel> PrepareProductDetailsModelAsync(Product product,
         ShoppingCartItem updatecartitem = null, bool isAssociatedProduct = false)
     {
+        _logger.LogInformation("Preparing details for product {ProductId} ('{ProductName}')", product.Id, product.Name);
+        
         using var activity = _activitySource.StartActivity("ProductModelFactory.PrepareProductDetails");
         
         activity?.SetTag("product.id", product.Id);
@@ -1453,8 +1460,6 @@ public partial class ProductModelFactory : IProductModelFactory
         
         try
         {
-            ArgumentNullException.ThrowIfNull(product);
-
             ArgumentNullException.ThrowIfNull(product);
 
             //standard properties
@@ -1686,10 +1691,16 @@ public partial class ProductModelFactory : IProductModelFactory
                 model.JsonLd = JsonConvert.SerializeObject(jsonLdModel, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
             }
 
+            stopwatch.Stop();
+        
+            _logger.LogInformation("Product details prepared for {ProductId} in {DurationMs}ms", product.Id, stopwatch.ElapsedMilliseconds);
+
             return model;
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error preparing details for product {ProductId}", product.Id);
+            
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("success", false);
             activity?.SetTag("error.message", ex.Message);

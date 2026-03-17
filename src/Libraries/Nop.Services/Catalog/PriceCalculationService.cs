@@ -9,6 +9,7 @@ using Nop.Core.Domain.Stores;
 using Nop.Services.Customers;
 using Nop.Services.Directory;
 using Nop.Services.Discounts;
+using Microsoft.Extensions.Logging;
 
 namespace Nop.Services.Catalog;
 
@@ -21,6 +22,9 @@ public partial class PriceCalculationService : IPriceCalculationService
 
     private static readonly ActivitySource _activitySource = 
             new("Nop.Services.Catalog.PriceCalculation");
+
+    // Logger
+    private readonly ILogger<PriceCalculationService> _logger;
 
     protected readonly CatalogSettings _catalogSettings;
     protected readonly CurrencySettings _currencySettings;
@@ -37,7 +41,7 @@ public partial class PriceCalculationService : IPriceCalculationService
 
     #region Ctor
 
-    public PriceCalculationService(CatalogSettings catalogSettings,
+    public PriceCalculationService(
         CurrencySettings currencySettings,
         ICategoryService categoryService,
         ICurrencyService currencyService,
@@ -46,7 +50,9 @@ public partial class PriceCalculationService : IPriceCalculationService
         IManufacturerService manufacturerService,
         IProductAttributeParser productAttributeParser,
         IProductService productService,
-        IStaticCacheManager staticCacheManager)
+        IStaticCacheManager staticCacheManager,
+        ILogger<PriceCalculationService> logger,  // Logger
+        CatalogSettings catalogSettings)
     {
         _catalogSettings = catalogSettings;
         _currencySettings = currencySettings;
@@ -58,6 +64,7 @@ public partial class PriceCalculationService : IPriceCalculationService
         _productAttributeParser = productAttributeParser;
         _productService = productService;
         _staticCacheManager = staticCacheManager;
+        _logger = logger;  // Assign logger
     }
 
     #endregion
@@ -238,6 +245,8 @@ public partial class PriceCalculationService : IPriceCalculationService
         Customer customer,
         decimal productPriceWithoutDiscount)
     {
+        _logger.LogInformation("Calculating discounts for product {ProductId}, price before discount: {Price:C}", product.Id, productPriceWithoutDiscount);
+        
         using var activity = _activitySource.StartActivity("PriceCalculation.GetDiscountAmount");
 
         try
@@ -269,12 +278,25 @@ public partial class PriceCalculationService : IPriceCalculationService
             appliedDiscounts = _discountService.GetPreferredDiscount(allowedDiscounts, productPriceWithoutDiscount, out appliedDiscountAmount);
 
             stopwatch.Stop();
+
+            if (appliedDiscountAmount > 0)
+            {
+                _logger.LogInformation("Discount of {DiscountAmount:C} applied to product {ProductId} ({DiscountCount} discounts)", 
+                    appliedDiscountAmount, product.Id, appliedDiscounts.Count);
+            }
+            else
+            {
+                _logger.LogDebug("No discounts applied to product {ProductId}", product.Id);
+            }
+
             activity?.SetTag("discount_calculation.duration_ms", stopwatch.ElapsedMilliseconds);
 
             return (appliedDiscountAmount, appliedDiscounts);
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error calculating discounts for product {ProductId}", product.Id);
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error", "true");
             throw;
@@ -365,6 +387,8 @@ public partial class PriceCalculationService : IPriceCalculationService
         DateTime? rentalStartDate,
         DateTime? rentalEndDate)
     {
+        _logger.LogInformation("Calculating final price for product {ProductId} ('{ProductName}'), quantity {Quantity}", product.Id, product.Name, quantity);
+        
         using var activity = _activitySource.StartActivity("PriceCalculation.GetFinalPrice");
         
         try
@@ -467,6 +491,8 @@ public partial class PriceCalculationService : IPriceCalculationService
             });
 
             stopwatch.Stop();
+
+            _logger.LogInformation("Price calculated for product {ProductId}: final={FinalPrice:C}, original={OriginalPrice:C}, discount={DiscountAmount:C}, duration={DurationMs}ms", product.Id, rezPrice, rezPriceWithoutDiscount, discountAmount, stopwatch.ElapsedMilliseconds);
             
             activity?.SetTag("price.final", rezPrice);
             activity?.SetTag("price.original", rezPriceWithoutDiscount);
@@ -485,6 +511,8 @@ public partial class PriceCalculationService : IPriceCalculationService
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error calculating price for product {ProductId}", product.Id);
+            
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error.message", ex.Message);
             activity?.SetTag("error", "true");

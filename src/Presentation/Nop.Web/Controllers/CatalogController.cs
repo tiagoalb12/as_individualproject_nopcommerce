@@ -34,6 +34,8 @@ public partial class CatalogController : BasePublicController
     private static readonly ActivitySource _activitySource = 
         new("Nop.Web.CatalogController");
 
+    private readonly ILogger<CatalogController> _logger;
+
     protected readonly CatalogSettings _catalogSettings;
     protected readonly IAclService _aclService;
     protected readonly ICatalogModelFactory _catalogModelFactory;
@@ -84,7 +86,9 @@ public partial class CatalogController : BasePublicController
         IWorkContext workContext,
         FilterLevelSettings filterLevelSettings,
         MediaSettings mediaSettings,
-        VendorSettings vendorSettings)
+        VendorSettings vendorSettings,
+        ILogger<CatalogController> logger // Logging
+        )
     {
         _catalogSettings = catalogSettings;
         _aclService = aclService;
@@ -109,6 +113,8 @@ public partial class CatalogController : BasePublicController
         _filterLevelSettings = filterLevelSettings;
         _mediaSettings = mediaSettings;
         _vendorSettings = vendorSettings;
+        // Logging
+        _logger = logger;
     }
 
     #endregion
@@ -128,6 +134,8 @@ public partial class CatalogController : BasePublicController
             activity?.SetTag("category.id", categoryId);
             activity?.SetTag("http.host", Request.Host.Value);
             activity?.SetTag("http.user_agent", Request.Headers["User-Agent"]);
+
+            _logger.LogInformation("Category {CategoryId} viewed", categoryId);
             
             var stopwatch = Stopwatch.StartNew();
             
@@ -137,6 +145,7 @@ public partial class CatalogController : BasePublicController
             {
                 activity?.SetTag("category.available", false);
                 activity?.SetTag("http.status_code", 404);
+                _logger.LogWarning("Category {CategoryId} not found", categoryId);
                 return InvokeHttp404();
             }
             
@@ -160,10 +169,11 @@ public partial class CatalogController : BasePublicController
             var totalCount = model?.CatalogProductsModel?.TotalItems ?? 0;
             activity?.SetTag("category.products_count", totalCount);
 
+            _logger.LogInformation("Category {CategoryId} loaded with {ProductCount} products in {DurationMs}ms", categoryId, totalCount, stopwatch.ElapsedMilliseconds);
+
             // Quantos produtos vieram nesta página
             var pageCount = model?.CatalogProductsModel?.Products?.Count ?? 0;
             activity?.SetTag("category.page_results", pageCount);
-
             activity?.SetTag("category.duration_ms", stopwatch.ElapsedMilliseconds);
             activity?.SetTag("http.status_code", 200);
             
@@ -173,6 +183,8 @@ public partial class CatalogController : BasePublicController
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error loading category {CategoryId}", categoryId);
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("http.status_code", 500);
             activity?.SetTag("error", "true");
@@ -406,6 +418,8 @@ public partial class CatalogController : BasePublicController
     [SaveLastContinueShoppingPage]
     public virtual async Task<IActionResult> Search(SearchModel model, CatalogProductsCommand command)
     {
+        _logger.LogInformation("Search initiated with term '{SearchTerm}'", model?.q ?? "[empty]");
+
         // SPAN - operação de pesquisa de produtos
         using var activity = _activitySource.StartActivity("CatalogController.Search", ActivityKind.Server);
         
@@ -434,9 +448,10 @@ public partial class CatalogController : BasePublicController
             // Quantos produtos vieram nesta página
             var pageCount = model?.CatalogProductsModel?.Products?.Count ?? 0;
             activity?.SetTag("search.page_results", pageCount);
-
             activity?.SetTag("search.duration_ms", stopwatch.ElapsedMilliseconds);
             activity?.SetTag("http.status_code", 200);
+
+            _logger.LogInformation("Search for '{SearchTerm}' found {ResultCount} results in {DurationMs}ms", model?.q ?? "[empty]", totalCount, stopwatch.ElapsedMilliseconds);
 
             TelemetryMetrics.SearchDurationMs.Record(
                 stopwatch.ElapsedMilliseconds,
@@ -446,6 +461,8 @@ public partial class CatalogController : BasePublicController
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Search failed for term '{SearchTerm}'", model?.q ?? "[empty]");
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("http.status_code", 500);
             activity?.SetTag("error", "true");
@@ -460,18 +477,26 @@ public partial class CatalogController : BasePublicController
     [CheckLanguageSeoCode(ignore: true)]
     public virtual async Task<IActionResult> SearchTermAutoComplete(string term, int categoryId)
     {
+        _logger.LogInformation("Auto-complete requested for term '{Term}'", term);
+
         using var activity = _activitySource.StartActivity("CatalogController.AutoComplete");
     
         activity?.SetTag("search.term", term ?? "[empty]");
         activity?.SetTag("search.category_id", categoryId);
 
         if (string.IsNullOrWhiteSpace(term))
+        {
+            _logger.LogDebug("Auto-complete skipped - empty term");
             return Content("");
+        }
 
         term = term.Trim();
 
         if (string.IsNullOrWhiteSpace(term) || term.Length < _catalogSettings.ProductSearchTermMinimumLength)
-            return Content("");
+            {
+                _logger.LogDebug("Auto-complete skipped - term '{Term}' too short", term);
+                return Content("");
+            }
 
         //products
         var productNumber = _catalogSettings.ProductSearchAutoCompleteNumberOfProducts > 0 ?
@@ -493,6 +518,9 @@ public partial class CatalogController : BasePublicController
         var showLinkToResultSearch = _catalogSettings.ShowLinkToAllResultInSearchAutoComplete && (products.TotalCount > productNumber);
 
         var models = (await _productModelFactory.PrepareProductOverviewModelsAsync(products, false, _catalogSettings.ShowProductImagesInSearchAutoComplete, _mediaSettings.AutoCompleteSearchThumbPictureSize)).ToList();
+
+        _logger.LogInformation("Auto-complete for '{Term}' returned {ResultCount} results", term, models.Count);
+
         var result = new List<object>();
         foreach (var p in models)
             result.Add(new { label = p.Name, producturl = await _nopUrlHelper.RouteGenericUrlAsync<Product>(new { SeName = p.SeName }), productpictureurl = p.PictureModels.FirstOrDefault()?.ImageUrl, showlinktoresultsearch = showLinkToResultSearch });

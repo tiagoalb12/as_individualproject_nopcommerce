@@ -19,6 +19,7 @@ using Nop.Services.Security;
 using Nop.Services.Shipping.Date;
 using Nop.Services.Stores;
 using Nop.Services.Vendors;
+using Microsoft.Extensions.Logging;
 
 namespace Nop.Services.Catalog;
 
@@ -31,6 +32,9 @@ public partial class ProductService : IProductService
 
     private static readonly ActivitySource ActivitySource =
         new("Nop.Services.Catalog.ProductService");
+
+    // logger    
+    private readonly ILogger<ProductService> _logger;
 
     protected readonly CatalogSettings _catalogSettings;
     protected readonly IAclService _aclService;
@@ -105,7 +109,9 @@ public partial class ProductService : IProductService
         IVendorService vendorService,
         IStoreMappingService storeMappingService,
         IWorkContext workContext,
-        LocalizationSettings localizationSettings)
+        LocalizationSettings localizationSettings,
+        ILogger<ProductService> logger  // Logger injection
+        )
     {
         _catalogSettings = catalogSettings;
         _aclService = aclService;
@@ -141,6 +147,7 @@ public partial class ProductService : IProductService
         _vendorService = vendorService;
         _workContext = workContext;
         _localizationSettings = localizationSettings;
+        _logger = logger;
     }
 
     #endregion
@@ -556,6 +563,8 @@ public partial class ProductService : IProductService
     /// </returns>
     public virtual async Task<Product> GetProductByIdAsync(int productId)
     {
+        _logger.LogInformation("Getting product by ID: {ProductId}", productId);
+        
         using var activity = ActivitySource.StartActivity("Catalogue.GetProductById");
         
         try
@@ -574,16 +583,23 @@ public partial class ProductService : IProductService
             
             if (product != null)
             {
+                _logger.LogInformation("Product {ProductId} ('{ProductName}') retrieved in {DurationMs}ms", productId, product.Name, stopwatch.ElapsedMilliseconds);
+
                 TelemetryMetrics.ProductDetailsLoadDurationMs.Record(
                     stopwatch.ElapsedMilliseconds,
                     new KeyValuePair<string, object?>("product_id", productId),
                     new KeyValuePair<string, object?>("product_name", product.Name));
+            } else
+            {
+                _logger.LogWarning("Product {ProductId} not found", productId);
             }
             
             return product;
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Error retrieving product {ProductId}", productId);
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error", "true");
             throw;
@@ -865,6 +881,8 @@ public partial class ProductService : IProductService
         bool showHidden = false,
         bool? overridePublished = null)
     {
+        _logger.LogInformation("Searching products with keywords: '{Keywords}', page {PageIndex}, size {PageSize}", keywords, pageIndex, pageSize);
+        
         // SPAN - operação de pesquisa de produtos
         using var activity = ActivitySource.StartActivity("Catalogue.SearchProducts");
 
@@ -1216,10 +1234,14 @@ public partial class ProductService : IProductService
 
             activity?.SetStatus(ActivityStatusCode.Ok);
 
+            _logger.LogInformation("Search completed: found {ResultCount} results in {DurationMs}ms", result.TotalCount, stopwatch.ElapsedMilliseconds);
+
             return result;
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Search failed for keywords: '{Keywords}'", keywords);
+            
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error", "true"); 
 
