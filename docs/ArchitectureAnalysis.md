@@ -1,6 +1,6 @@
-**1. Read Before You Touch — Architecture Analysis**
+# 1. Read Before You Touch — Architecture Analysis
 
-- **How are the layers organised and what are the dependency rules between them?**
+### How are the layers organised and what are the dependency rules between them?
 
 Esta aplicação, nopCommerce segue uma arquitetura em camadas, onde as responsabilidades estão bem definidas.
 Após uma análise efetuada à estrutura do projeto, podemos então concluir as seguintes divisões:
@@ -49,15 +49,10 @@ ___
 | **Nop.Services** | Lógica de negócio | Services, IEventPublisher | `Nop.Data` |
 | **Nop.Data** | Acesso a dados | Repositories, Entities, EF Core | `Nop.Core` |
 | **Nop.Core** | Modelos base | Domain Entities, Interfaces, Enums | Nenhuma |
-_____
-_____
-_____
-_____
-_____
-_____
 
+___
 
-- **How does nopCommerce handle events internally — what is IEventPublisher and how is it used?**
+### How does nopCommerce handle events internally — what is IEventPublisher and how is it used?
 
     - O **NopCommerce** implementa um sistema de eventos in-memory baseado no padrão Publisher/Subscriber. Assim, é permitido que diferentes partes da aplicação comuniquem de forma separada, onde os componentes podem publicar eventos sem conhecer quem os vai consumir.
 
@@ -68,14 +63,9 @@ _____
         - Esta interface é importante para a criação de subscribers;
         - Para consumir eventos (subscribers), o nopCommerce utiliza a interface ```IConsumer<TEvent>```. Qualquer classe que implemente esta interface é automaticamente invocada quando um evento do tipo TEvent é publicado. 
 
-_____
-_____
-_____
-_____
-_____
-_____
+____
 
-- **Where does the code make it easy to add observability, and where does it make it hard?**
+### Where does the code make it easy to add observability, and where does it make it hard?
     - ***Facilidade na adição de observabilidade:***
         - *Injeção de Dependências generalizadas:*
             - Todos os serviços usam DI nos seus construtores, o que permite adicionar ```ILogger'T'``` de forma bastante trivial, sem alterar a lógica existente dos métodos;
@@ -92,12 +82,7 @@ _____
             - Alguns métodos, nomeadamente, ```GetFinalPriceAsync```, contêm o respetivo sistema de cślculo de preços dentro de um callback de cache. Pode misturar tempo de execução com tempo de acesso à cache.
 
 _____
-_____
-_____
-_____
-_____
-_____
-- **What would you need to change structurally to instrument it properly — and is that change worth making?**
+### What would you need to change structurally to instrument it properly — and is that change worth making?
     - ***Tornar IEventPublisher extensível:***
         - *O que mudar:*
             - Remover o ```sealed``` da classe ```EventPublisher```
@@ -150,13 +135,8 @@ _____
 
         Tendo em conta o custo-benefício apresentado, vale muito a pena olhar para esta adição.
         
-_____
-_____
-_____
-_____
-_____
 _____        
-**Conclusão:**
+### Conclusão:
 Após uma análise profunda à arquitetura deste sistema, nopCommerce, concluímos que o mesmo se revela bem estruturado e organizado, seguindo uma arquitetura em camadas, conforme partilhado nos primeiro tópicos desta análise.
 Esta organização facilitou, desde logo, a compreensão do fluxo de dados e a identificação dos pontos críticos para as implementações seguintes.
 
