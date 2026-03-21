@@ -6,6 +6,7 @@ Este projeto consiste na instrumentação do **nopCommerce** com **OpenTelemetry
 
 ## Estrutura do projeto
 
+```bash
 AS_INDIVIDUALPROJECT_NOPCOMMERCE/
 ├── docker-compose.yml
 ├── otel-config.yaml                   # Configuração do OpenTelemetry Collector
@@ -20,16 +21,16 @@ AS_INDIVIDUALPROJECT_NOPCOMMERCE/
 │   │
 │   ├── Nop.Services/
 │   │   └── Catalog/
-│   │       ├── ProductService.cs      # Instrumentado com spans e métricas
-│   │       └── PriceCalculationService.cs  # Instrumentado com spans e métricas
+│   │       ├── ProductService.cs          # Instrumentado com spans e métricas
+│   │       └── PriceCalculationService.cs # Instrumentado com spans e métricas
 │   │
 │   └── Nop.Web/
 │       ├── Controllers/
-│       │   └── CatalogController.cs   # Instrumentado com spans
+│       │   └── CatalogController.cs       # Instrumentado com spans
 │       ├── Factories/
-│       │   └── ProductModelFactory.cs # Instrumentado com spans
-│       └── Program.cs                 # Configuração OpenTelemetry
-└──
+│       │   └── ProductModelFactory.cs     # Instrumentado com spans
+│       └── Program.cs                     # Configuração OpenTelemetry
+```
 
 
 ## Fluxo escolhido e respetiva arquitetura
