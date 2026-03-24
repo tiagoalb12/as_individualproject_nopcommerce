@@ -592,6 +592,9 @@ public partial class ProductService : IProductService
             } else
             {
                 _logger.LogWarning("Product {ProductId} not found", productId);
+
+                TelemetryMetrics.SearchErrors.Add(1,
+                    new KeyValuePair<string, object?>("error_type", "ProductNotFound"));
             }
             
             return product;
@@ -602,6 +605,10 @@ public partial class ProductService : IProductService
 
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error", "true");
+
+            TelemetryMetrics.SearchErrors.Add(1,
+                new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
+
             throw;
         }
     }
@@ -1235,6 +1242,15 @@ public partial class ProductService : IProductService
             activity?.SetStatus(ActivityStatusCode.Ok);
 
             _logger.LogInformation("Search completed: found {ResultCount} results in {DurationMs}ms", result.TotalCount, stopwatch.ElapsedMilliseconds);
+
+            if (result.TotalCount == 0 && !string.IsNullOrEmpty(keywords))
+            {
+                _logger.LogWarning("Search with term '{Keywords}' returned 0 results", keywords);
+                
+                TelemetryMetrics.SearchErrors.Add(1,
+                    new KeyValuePair<string, object?>("error_type", "NoResults"),
+                    new KeyValuePair<string, object?>("search_term", keywords));
+            }
 
             return result;
         }

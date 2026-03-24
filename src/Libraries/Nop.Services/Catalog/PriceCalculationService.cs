@@ -299,6 +299,9 @@ public partial class PriceCalculationService : IPriceCalculationService
 
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error", "true");
+
+            TelemetryMetrics.SearchErrors.Add(1,
+                new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
             throw;
         }
     }
@@ -516,6 +519,9 @@ public partial class PriceCalculationService : IPriceCalculationService
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.SetTag("error.message", ex.Message);
             activity?.SetTag("error", "true");
+
+            TelemetryMetrics.SearchErrors.Add(1,
+                new KeyValuePair<string, object?>("error_type", ex.GetType().Name));
             throw;
         }
     }

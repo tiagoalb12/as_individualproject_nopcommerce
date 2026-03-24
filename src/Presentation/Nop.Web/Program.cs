@@ -5,6 +5,7 @@ using Nop.Web.Framework.Infrastructure.Extensions;
 using Nop.Core.Telemetry;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Resources;
+using OpenTelemetry.Metrics;
 
 namespace Nop.Web;
 
@@ -45,6 +46,17 @@ public partial class Program
             options.IncludeScopes = true;
         });
 
+        // Métricas com OpenTelemetry
+        builder.Services.AddOpenTelemetry()
+            .WithMetrics(metrics => metrics
+                .AddMeter("NopCommerce.Custom")
+                .AddOtlpExporter(otlpOptions =>
+                {
+                    otlpOptions.Endpoint = new Uri("http://telemetry_service:4317");
+                    otlpOptions.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+                })
+                .AddConsoleExporter());
+
         //load application settings
         builder.Services.ConfigureApplicationSettings(builder);
 
@@ -72,6 +84,25 @@ public partial class Program
         var app = builder.Build();
 
         app.Lifetime.ApplicationStopping.Register(() => telemetry.Dispose());
+
+        app.Use(async (context, next) =>
+        {
+            await next();
+
+            if (context.Response.StatusCode == 404)
+            {
+                // Captura URL inválida
+                TelemetryMetrics.SearchErrors.Add(1,
+                    new KeyValuePair<string, object?>("error_type", "NotFound"),
+                    new KeyValuePair<string, object?>("path", context.Request.Path),
+                    new KeyValuePair<string, object?>("method", context.Request.Method));
+
+                // Log opcional
+                var logger = context.RequestServices.GetService<ILogger<Program>>();
+                logger?.LogWarning("404 Not Found: {Method} {Path}", 
+                    context.Request.Method, context.Request.Path);
+            }
+        });
 
         //configure the application HTTP request pipeline
         app.ConfigureRequestPipeline();
